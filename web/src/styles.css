@@ -1,0 +1,283 @@
+/* One stylesheet for the whole app. It is small enough that splitting it per
+   component would cost more in indirection than it saves. Component-local rules
+   live in the components; everything shared is here. */
+
+:root {
+  /* Light is the base set. The dark set below only redefines the values that
+     differ, so a token added here cannot be forgotten in the other theme. */
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --bg-sunken: #f4f5f7;
+  --bg-raised: #ffffff;
+  --rail: #eef0f3;
+  --hover: #e4e7ec;
+  --border: #d8dce2;
+  --border-strong: #b9c0c9;
+  --text: #1b1f24;
+  --text-dim: #5d6570;
+  --accent: #1f6feb;
+  --accent-soft: #dbe8ff;
+  --danger: #b42318;
+  --danger-soft: #fdeceb;
+  --ok: #17803d;
+  --warn: #a15c07;
+  --tooltip: #1b1f24;
+  --tooltip-fg: #ffffff;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --row-height: 24px;
+
+  /* One height for every control on the query line — the input, the range
+     picker, the row cap, Run, Live, Presets. They carry different fonts and
+     paddings, so left to themselves they come out at four different heights and
+     the line looks ragged. */
+  --control-h: 30px;
+}
+
+/* The theme the rail selects. theme.ts writes the RESOLVED theme here, so this
+   attribute is the only thing the stylesheet has to understand — "auto" is
+   already decided by the time it lands. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0f1216;
+  --bg-sunken: #15191f;
+  --bg-raised: #1a1f26;
+  --rail: #12161b;
+  --hover: #222831;
+  --border: #2a313a;
+  --border-strong: #3b444f;
+  --text: #e6e9ee;
+  --text-dim: #98a2b0;
+  --accent: #58a6ff;
+  --accent-soft: #16304f;
+  --danger: #ff7b72;
+  --danger-soft: #3a1a17;
+  --ok: #56d364;
+  --warn: #e3b341;
+  --tooltip: #e6e9ee;
+  --tooltip-fg: #0f1216;
+}
+
+/* Only for the moment before theme.ts runs: it sets data-theme on every load,
+   so this never applies afterwards. Without it, a dark-mode machine gets one
+   white frame on a cold load. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --bg: #0f1216;
+    --bg-sunken: #15191f;
+    --bg-raised: #1a1f26;
+    --rail: #12161b;
+    --hover: #222831;
+    --border: #2a313a;
+    --border-strong: #3b444f;
+    --text: #e6e9ee;
+    --text-dim: #98a2b0;
+    --accent: #58a6ff;
+    --accent-soft: #16304f;
+    --danger: #ff7b72;
+    --danger-soft: #3a1a17;
+    --ok: #56d364;
+    --warn: #e3b341;
+    --tooltip: #e6e9ee;
+    --tooltip-fg: #0f1216;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 var(--sans);
+}
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { border-color: var(--border-strong); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+  padding: 2px 6px;
+}
+
+button.ghost:hover { color: var(--text); background: var(--bg-sunken); }
+
+input[type="text"], input[type="number"], input[type="datetime-local"], select, textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 8px;
+}
+
+input:focus, textarea:focus, select:focus, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+code, .mono { font-family: var(--mono); font-size: 12px; }
+
+/* Scrollbars: as narrow as they can be and still be grabbed.
+
+   This screen is a table of log lines, and a 15px platform scrollbar takes that
+   width away from _msg on every scrollable pane — the table, the field panel,
+   the entry drawer and the timezone list all have one. 6px keeps them visible
+   (an overlay scrollbar that appears only while scrolling would hide how far
+   down a result set you are) while giving the width back to the content.
+
+   Two syntaxes, and the order between them matters. Where a browser supports
+   BOTH, the standard scrollbar-width wins and ::-webkit-scrollbar is ignored —
+   so setting both unconditionally would leave Chrome on its own idea of "thin"
+   (~9px) and only Safari at 6. Hence the @supports: browsers that understand
+   the pseudo-element get the explicit 6px, and Firefox — which does not — gets
+   the standard property instead. Neither browser sees both. */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* Where a horizontal and a vertical bar meet — the results table can have both.
+   Left unpainted, it renders as a light square in dark mode. */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    /* Thumb, then track. The track is transparent so a pane with nothing to
+       scroll shows nothing at all. */
+    scrollbar-color: var(--border-strong) transparent;
+  }
+}
+
+/* Layout: the query line is pinned at the top, the table takes what is left,
+   and only the table scrolls. */
+.app {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Everything to the right of the rail: query line, chart, table. */
+.workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.banner {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.muted { color: var(--text-dim); }
+.spacer { flex: 1; }
+
+/* --- the left rail's controls ---------------------------------------------
+   Shared by the timezone, theme and user buttons: one 40px hit target with a
+   hover label, since an icon-width rail has nowhere to put a caption. */
+
+.rail-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.rail-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.rail-btn .tip {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 40;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--tooltip);
+  color: var(--tooltip-fg);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+}
+
+.rail-btn:hover .tip { opacity: 1; }

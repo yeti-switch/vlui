@@ -1,0 +1,7 @@
+/vlui
+/config.yml
+/web/dist/*
+!/web/dist/.gitkeep
+/web/node_modules
+/dist
+*.deb

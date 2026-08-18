@@ -1,0 +1,56 @@
+[Unit]
+Description=vlui — web UI for VictoriaLogs
+Documentation=https://github.com/yeti-switch/vlui
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# No account to create, own, or clean up: systemd allocates a transient UID for
+# the lifetime of the service and takes it away afterwards. Nothing on disk is
+# owned by it, which is fine — this service writes nothing at all. It has no
+# database, no cache and no session store; state lives in VictoriaLogs and in
+# the signed session cookie.
+DynamicUser=yes
+
+# The catch with DynamicUser: the transient UID cannot read a root-owned config.
+# LoadCredential is the answer — systemd reads the file as root and places a copy
+# in a private tmpfs readable only by this service, so the config can stay
+# 0600 root:root and still never be world-readable. It holds the OIDC client
+# secret and the cookie signing key, so that matters.
+#
+# %d expands to that credentials directory.
+LoadCredential=config:/opt/vlui/etc/config.yml
+ExecStart=/opt/vlui/bin/vlui -config %d/config
+
+Restart=on-failure
+RestartSec=5s
+
+# Nothing this service creates should be world-readable.
+UMask=0077
+
+# DynamicUser implies NoNewPrivileges, PrivateTmp, ProtectSystem=strict,
+# ProtectHome=read-only and RemoveIPC. The rest is not implied:
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

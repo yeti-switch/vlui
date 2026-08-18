@@ -1,0 +1,19 @@
+{
+  "name": "vlui-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.0",
+    "typescript": "~5.9",
+    "vite": "^8.0.0",
+    "vue-tsc": "^3.0.0"
+  }
+}

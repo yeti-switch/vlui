@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# A new push to a PR makes the previous run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# CGO_ENABLED is deliberately NOT set job-wide. The two Go steps want opposite
+# values, and a shared default would quietly break one of them:
+#
+#   - the race detector is implemented in cgo, so `go test -race` needs 1;
+#   - the shipped binary must be static (distroless has no libc), so `go build`
+#     needs 0.
+
+jobs:
+  frontend:
+    name: SPA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+        working-directory: web
+
+      # `npm run build` runs vue-tsc --noEmit first, so this is the type check
+      # and the build in one.
+      - run: npm run build
+        working-directory: web
+
+      # The Go build embeds web/dist, so hand it over rather than building the
+      # SPA twice.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: web/dist
+          retention-days: 1
+
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    needs: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # go:embed fails outright without web/dist, so the SPA must land first.
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: web/dist
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal web)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # -race, not plain: the live tail reads its upstream on one goroutine and
+      # writes the response on another, which is exactly the kind of thing a
+      # serial test never exercises.
+      - name: go test -race
+        run: go test -race -count=1 ./...
+        env:
+          CGO_ENABLED: 1
+
+      # Static, as it ships: distroless/static has no libc, so a cgo-linked
+      # binary would build here and then fail to start in the container.
+      - name: build
+        run: go build -o vlui ./cmd/vlui
+        env:
+          CGO_ENABLED: 0
+
+      # The SPA is embedded, so a binary that cannot serve its own index.html is
+      # broken even though it compiled. The exporter is checked in the same
+      # breath: it is a separate listener, and a config that silently failed to
+      # start it would look identical from the app's port.
+      - name: smoke test
+        run: |
+          ./vlui -config /dev/null &
+          pid=$!
+          sleep 2
+
+          code=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ || true)
+          health=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true)
+          metrics=$(curl -sS http://127.0.0.1:9108/metrics || true)
+          kill $pid || true
+
+          if [ "$code" != "200" ]; then
+            echo "::error::the embedded SPA did not serve (HTTP $code)"; exit 1
+          fi
+          if [ "$health" != "200" ]; then
+            echo "::error::/healthz answered $health"; exit 1
+          fi
+          echo "$metrics" | grep -q '^vlui_build_info' \
+            || { echo "::error::the exporter served no vlui_ metrics"; exit 1; }
+
+      # -version must answer without a config and without opening a socket: it
+      # is what a postinst and a bug report both reach for.
+      - name: version flag
+        run: ./vlui -version
+
+      # A malformed config must fail loudly at startup rather than half-starting
+      # on defaults.
+      - name: rejects a bad config
+        run: |
+          printf 'victorialogs:\n  url: not-a-url\n' > bad.yml
+          set +e; out=$(./vlui -config bad.yml 2>&1); rc=$?; set -e
+          [ "$rc" = "1" ] || { echo "::error::rc=$rc, want 1"; echo "$out"; exit 1; }
+          echo "$out" | grep -q 'victorialogs.url' \
+            || { echo "::error::the error does not name the offending key: $out"; exit 1; }

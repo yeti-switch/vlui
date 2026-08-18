@@ -1,0 +1,230 @@
+# vlui — an alternative web UI for VictoriaLogs.
+#
+# This file is the whole configuration. There is no database: sessions live in a
+# signed cookie, and everything else is read from here at startup.
+#
+# Copy it to /opt/vlui/etc/config.yml, fill in the two or three values that are
+# deployment-specific, and start the service.
+
+# The address the UI and its API are served on. nginx terminates TLS in front of
+# this process, so loopback is the right answer on a host; a container must
+# listen on 0.0.0.0 instead.
+listen: 127.0.0.1:8080
+
+# Mount the whole app — SPA and API — under a sub-directory, so it can share a
+# domain with something else. Empty (the default) serves at the root.
+#
+# Applied at runtime rather than baked into the build, so the same binary works
+# at either. nginx then needs only:
+#
+#   location /logs/ {
+#     proxy_pass http://127.0.0.1:8080;    # no trailing path: keep the prefix
+#     proxy_set_header Host $host;
+#     proxy_set_header X-Forwarded-Proto https;
+#     proxy_buffering off;                 # live tailing is a stream
+#   }
+#
+# base_path: /logs
+
+victorialogs:
+  # The base URL, without the /select path. A vlselect in a cluster deployment,
+  # or a single-node vlogs.
+  url: http://127.0.0.1:9428
+
+  # Bounds one query. Generous on purpose: a wide range over a lot of data is a
+  # slow query, not a broken one. It also bounds the small endpoints (the
+  # histogram, the facets, autocomplete); live tailing is bounded by
+  # tail_max_duration below instead.
+  timeout: 60s
+
+  # For a VictoriaLogs behind vmauth or any other authenticating proxy.
+  # basic_auth:
+  #   username: vlui
+  #   password: ""
+
+  # The tenant this UI reads, sent as the AccountID / ProjectID headers on every
+  # request. Fixed for the process: which tenant is on show is a property of the
+  # deployment, not of whoever is looking. To publish two tenants, run two
+  # instances — they share nothing, so it costs a systemd unit and a port.
+  #
+  # 0/0 is the default tenant, which is also the only one a single-tenant
+  # install has. It is sent explicitly either way, so a misconfigured proxy
+  # cannot silently redirect the read somewhere else.
+  # tenant:
+  #   account_id: 0
+  #   project_id: 0
+
+  # The hard cap on rows in one result set, whatever the UI asks for. The
+  # browser has to render these, and the server has to hold what it has not yet
+  # flushed — neither should be at the mercy of a typo in the limit box.
+  max_rows: 5000
+
+  # What the limit box and the time picker start on.
+  default_limit: 500
+  default_range: 1h
+
+  # How long one live-tail connection may last before the server ends it. The
+  # browser reconnects by itself, so nobody sees the seam; this only stops a tab
+  # left open over a weekend from pinning an upstream stream open for the
+  # weekend.
+  tail_max_duration: 1h
+
+# OIDC. Any conformant provider: Keycloak, Authentik, Okta, Entra, Google, or
+# anything else that publishes a discovery document — everything but the client
+# credentials is read from <issuer>/.well-known/openid-configuration.
+auth:
+  # Off by default. When off, every request is anonymous, which is only
+  # acceptable behind an IP allowlist or on a trusted network — VictoriaLogs
+  # holds whatever your applications logged, which is usually more than it looks.
+  enabled: false
+
+  issuer: https://idp.example.com/realms/ops
+  client_id: vlui
+  client_secret: ""
+
+  # Must match what the provider has registered, exactly — including base_path.
+  redirect_url: https://logs.example.com/api/auth/callback
+
+  # Signs the session cookie. At least 32 bytes: `openssl rand -hex 32`.
+  # Rotating it logs everyone out, which is also how you revoke every session.
+  cookie_secret: CHANGEME-32-BYTES-MINIMUM-000000
+
+  # scopes: [openid, profile, email]
+  # session_ttl: 12h
+
+  # Authorisation, as opposed to authentication. Without this, anyone the IdP
+  # knows can read every log line this tenant holds. Requires the id_token to
+  # carry one of these in groups_claim.
+  # allowed_groups: [noc, sre]
+  # groups_claim: groups
+
+  # What "Sign out" means:
+  #
+  #   local     (default) Drop this app's session only. The IdP session survives,
+  #             so signing back in is one click — that is the SSO contract, and
+  #             it leaves every other app on the issuer alone.
+  #
+  #   provider  RP-initiated logout: end the IdP session too, signing the user
+  #             out of every app on that IdP. A large blast radius for a button
+  #             in a log viewer, hence opt-in. Needs post_logout_redirect_url,
+  #             registered with the provider.
+  #
+  # logout: local
+  # post_logout_redirect_url: https://logs.example.com/
+
+  # Only for testing over plain HTTP on localhost.
+  # secure_cookie: false
+
+  # For a provider that publishes no discovery document, give the endpoints by
+  # hand instead of `issuer`:
+  # auth_url:  https://idp.example/authorize
+  # token_url: https://idp.example/token
+  # jwks_url:  https://idp.example/jwks
+
+# Preset queries, offered in a dropdown next to the query line. Deployment
+# knowledge — "how do I find SIP errors here" — belongs with the deployment
+# rather than in each operator's browser history.
+# queries:
+#   - name: SIP errors
+#     query: '_stream:{app="sems"} error'
+#   - name: Failed calls
+#     query: '_stream:{app="yeti-web"} "call failed" | fields _time, _msg, host'
+
+# Tools — the icons down the left rail. Each one scopes the whole session to a
+# slice of the logs: its query is applied to the rows, the histogram, the facets,
+# autocomplete and live tailing, on top of whatever the operator types.
+#
+# The filter is shown beside the query input, so what is in force is always on
+# screen. It is APPLIED BY THIS SERVER, from the tool's id, on every request —
+# never composed in the browser. That distinction is the whole design: /api/* is
+# reachable with curl by anyone holding a session cookie, so a filter the SPA
+# glued onto the query box would be a suggestion, not a restriction. For the
+# same reason a request that names no tool gets the FIRST tool's filter rather
+# than an unfiltered read.
+#
+# It is sent to VictoriaLogs as extra_filters, which it propagates into every
+# subquery (| join, | union, :in(...)). A filter merely concatenated onto the
+# front of the query would be escapable through a subquery — VictoriaLogs'
+# own documentation names extra_filters as the mechanism for access control.
+#
+# icon: one of gear, yeti, bolt, bug, chart, cloud, database, globe, lock,
+#       phone, server, tag, terminal. An unknown name fails at startup.
+# query: optional, and may not contain a pipe (it is combined with the
+#        operator's query, so a pipe would swallow it).
+#
+# A tool that defines a query also makes the query box optional: an empty box
+# means "everything this tool covers" and is sent upstream as `*`, still bounded
+# by the tool's filter and the time range. With no tool filter in force, an
+# empty query stays an error.
+#
+# tools:
+#   - tooltip: main
+#     icon: gear
+#
+#   - tooltip: Yeti Logs
+#     icon: yeti
+#     query: 'named_tags.system: yeti'
+#
+#   - tooltip: API Logs
+#     icon: bolt
+#     query: 'system: api'
+#
+# IS THIS ACCESS CONTROL? Only if you make it so. By default every signed-in
+# account may select every tool, which is right when the rail is a set of
+# shortcuts — anyone can switch to the widest one, exactly as they could type
+# its query by hand.
+#
+# To make it a boundary, two things have to be true:
+#
+#   1. There is no unrestricted tool for someone to switch to — or the ones that
+#      are wide carry allowed_groups.
+#   2. The first tool is a safe default, since that is what a request naming no
+#      tool receives.
+#
+# allowed_groups requires auth.enabled and matches the same claim as
+# auth.groups_claim. A tool the account may not use is refused (403) AND left
+# out of /api/config, so it never appears in their rail:
+#
+#   - tooltip: Billing
+#     icon: lock
+#     query: 'system: billing'
+#     allowed_groups: [billing, admin]
+#
+# Note what this still is not: a restriction on WHICH LOGS EXIST. Anyone who can
+# reach VictoriaLogs directly is unaffected by any of it — keep it on loopback
+# or behind vmauth.
+
+# The built-in Prometheus exporter, on its own socket. Never a route on the app:
+# that one sits behind OIDC and may sit under base_path, and a scraper should
+# have to care about neither. Nothing but metrics is served here.
+#
+# Worth alerting on:
+#
+#   # VictoriaLogs is refusing our requests. The endpoint and status labels say
+#   # which call and why.
+#   - alert: VictoriaLogsErrors
+#     expr: rate(vlui_vl_requests_total{status!="ok"}[5m]) > 0
+#
+#   # VictoriaLogs is unreachable. Only exported when probe_interval is set.
+#   - alert: VictoriaLogsDown
+#     expr: vlui_vl_up == 0
+#
+# Also exported: http_requests_total{route,status}, http_request_duration_seconds,
+# vl_request_duration_seconds, query_rows_total, query_bytes_total,
+# queries_active, tail_sessions_active, build_info, and the usual
+# go_*/process_* series.
+metrics:
+  listen: 127.0.0.1:9108
+  path: /metrics
+
+  # How often VictoriaLogs is pinged to keep vlui_vl_up fresh.
+  #
+  # It exists because the gauge has to mean something on an idle instance:
+  # updated only by user queries, it would report the state of whenever somebody
+  # last looked. Probing on scrape instead would be worse — a hung VictoriaLogs
+  # would hang the scrape and take every other metric down with it, exactly when
+  # they are needed.
+  #
+  # Set it to 0 to disable both the probe and the gauge, and alert on
+  # rate(vlui_vl_requests_total{status!="ok"}[5m]) instead.
+  probe_interval: 15s

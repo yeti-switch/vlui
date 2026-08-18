@@ -1,0 +1,28 @@
+# The configuration baked into the container image.
+#
+# It differs from config.example.yml in one way that matters: a container must
+# listen on all interfaces, since loopback inside a network namespace is
+# reachable from nothing. Mount your own file over /opt/vlui/etc/config.yml, or
+# name a different one — `docker run … vlui -config /custom.yml` replaces the
+# image's CMD.
+listen: 0.0.0.0:8080
+
+victorialogs:
+  # There is no sensible default here — the address depends entirely on how the
+  # container is networked. Override it.
+  url: http://victorialogs:9428
+  timeout: 60s
+  max_rows: 5000
+  default_limit: 500
+  default_range: 1h
+  tail_max_duration: 1h
+
+auth:
+  # Off, as in the example. An image that shipped with authentication on would
+  # point at an issuer that does not exist and refuse to start.
+  enabled: false
+
+metrics:
+  listen: 0.0.0.0:9108
+  path: /metrics
+  probe_interval: 15s

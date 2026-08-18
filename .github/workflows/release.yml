@@ -1,0 +1,184 @@
+name: Release
+
+# A published GitHub release, not a bare tag push: the release is the thing an
+# operator points at, and its notes are written by a human.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # attach artifacts to the release
+  packages: write # push the image to ghcr.io
+
+jobs:
+  deb:
+    name: Debian package
+    runs-on: ubuntu-latest
+
+    # In the org build image, as root — same as the other yeti Go services.
+    #
+    # Not cosmetic: upload-debian-pkg-action runs `apt -y install ruby gnupg`
+    # with no sudo, so on a stock runner it dies on the dpkg lock. A container
+    # job runs as root, and it gives us dpkg-deb from a trixie userland, which
+    # is what the package targets.
+    container: ghcr.io/yeti-switch/yeti-web/build-image:trixie
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # The SPA is embedded by go:embed (web/embed.go), so it must exist before
+      # the Go build runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the SPA
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Extract version
+        id: version
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          # Not ${GITHUB_SHA::7}: that is a bashism, and the shell inside the
+          # container is not ours to assume.
+          echo "commit=$(echo "$GITHUB_SHA" | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      # Static: the package then depends on nothing, and the same binary is what
+      # goes into the distroless image.
+      - name: Build static binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -buildvcs=false \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }} -X main.commit=${{ steps.version.outputs.commit }}" \
+            -o vlui ./cmd/vlui
+
+      - name: Build deb package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          PKG_DIR="vlui_${VERSION}_amd64"
+
+          # Everything the package owns lives under /opt/vlui, so the whole app
+          # is one directory to inspect, back up or remove. Nothing is put on
+          # PATH: this is a service systemd starts from an absolute path, not a
+          # command anyone types.
+          install -d "${PKG_DIR}/DEBIAN"
+          install -d "${PKG_DIR}/opt/vlui/bin"
+          install -d "${PKG_DIR}/opt/vlui/etc"
+          install -d "${PKG_DIR}/lib/systemd/system"
+
+          install -m 0755 vlui                     "${PKG_DIR}/opt/vlui/bin/vlui"
+          install -m 0644 config.example.yml       "${PKG_DIR}/opt/vlui/etc/config.example.yml"
+          install -m 0644 packaging/vlui.service   "${PKG_DIR}/lib/systemd/system/vlui.service"
+
+          cat > "${PKG_DIR}/DEBIAN/control" <<EOF
+          Package: vlui
+          Version: ${VERSION}
+          Architecture: amd64
+          Maintainer: YETI Switch <dev@yeti-switch.org>
+          Description: Web UI for VictoriaLogs
+           A LogsQL query line over a virtualised result table, with a hits
+           histogram, a field facet sidebar and live tailing. Go backend with the
+           Vue SPA embedded in the binary, OIDC login, a built-in Prometheus
+           exporter, one YAML file and no database.
+          EOF
+
+          install -m 0755 packaging/postinstall.sh "${PKG_DIR}/DEBIAN/postinst"
+          install -m 0755 packaging/preremove.sh   "${PKG_DIR}/DEBIAN/prerm"
+
+          dpkg-deb --build --root-owner-group "${PKG_DIR}"
+
+      - name: Attach artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            vlui
+            vlui_*.deb
+
+      # The step that actually matters: signs the package into the yeti APT
+      # repository, which is what `apt install vlui` reads from.
+      - name: Upload deb to repository
+        uses: yeti-switch/upload-debian-pkg-action@v2
+        with:
+          pkgs: vlui_*.deb
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          s3_codename: trixie
+          s3_prefix: vlui
+          s3_access_key_id: ${{ secrets.DEB_AWS_ACCESS_KEY_ID }}
+          s3_secret_access_key: ${{ secrets.DEB_AWS_SECRET_ACCESS_KEY }}
+          s3_endpoint_url: ${{ secrets.DEB_AWS_ENDPOINT }}
+
+  docker:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the SPA
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Extract version
+        id: version
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          echo "commit=$(echo "$GITHUB_SHA" | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      # Built per architecture and copied into the image, rather than compiled
+      # inside it: cross-compiling in Go is a build flag, while cross-building a
+      # container needs QEMU emulation of a whole toolchain.
+      - name: Build static binaries
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+        run: |
+          LDFLAGS="-s -w -X main.version=${{ steps.version.outputs.version }} -X main.commit=${{ steps.version.outputs.commit }}"
+          GOARCH=amd64 go build -buildvcs=false -ldflags="$LDFLAGS" -o dist/linux/amd64/vlui ./cmd/vlui
+          GOARCH=arm64 go build -buildvcs=false -ldflags="$LDFLAGS" -o dist/linux/arm64/vlui ./cmd/vlui
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/yeti-switch/vlui:${{ steps.version.outputs.version }}
+            ghcr.io/yeti-switch/vlui:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/yeti-switch/vlui
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
