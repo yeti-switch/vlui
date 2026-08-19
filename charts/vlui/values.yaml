@@ -1,0 +1,255 @@
+# vlui — web UI for VictoriaLogs.
+#
+# The chart ships an HTTPRoute (Gateway API) rather than an Ingress, and a
+# PodMonitor rather than a ServiceMonitor. Both are off by default: they need
+# CRDs this chart does not install, and a release that failed because the
+# cluster has no Gateway API would be a poor first impression.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/yeti-switch/vlui
+  # Empty means the chart's appVersion, which the release workflow sets to the
+  # release tag — so chart 1.4.0 runs vlui 1.4.0 unless you say otherwise.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # vlui talks to nothing in the cluster API. A token mounted into the pod would
+  # be a credential with no purpose and a blast radius if the pod were
+  # compromised.
+  automountServiceAccountToken: false
+
+# ---------------------------------------------------------------------------
+# The application config: config.example.yml in the repo, as YAML.
+#
+# It is rendered into a ConfigMap. Note what that means when auth.enabled is on:
+# auth.client_secret and auth.cookie_secret are then in a ConfigMap, readable by
+# anything with namespace read access and not treated as sensitive by RBAC,
+# audit logs or backups. They are also in the release history and in
+# `helm get values` either way. If that matters for your cluster, template the
+# whole file into a Secret yourself — the volume in this chart mounts a
+# ConfigMap, so that would need a small change, ask for it.
+#
+# `listen` and `metrics.listen` are forced to 0.0.0.0 by the chart (the ports
+# are respected). Loopback is right on a systemd host behind nginx and reachable
+# from nothing inside a pod.
+# ---------------------------------------------------------------------------
+config:
+  listen: 0.0.0.0:8080
+
+  # Mount the app under a sub-path. The chart follows it: the probes, the
+  # HTTPRoute's default path match and the NOTES all read this.
+  # base_path: /logs
+
+  victorialogs:
+    # In-cluster VictoriaLogs, or vlselect in a cluster deployment.
+    url: http://victorialogs:9428
+    timeout: 60s
+    max_rows: 5000
+    default_limit: 500
+    default_range: 1h
+    tail_max_duration: 1h
+    # basic_auth:
+    #   username: ""
+    #   password: ""
+    # tenant:
+    #   account_id: 0
+    #   project_id: 0
+
+  auth:
+    # Off means every request is anonymous — only acceptable behind something
+    # else that authenticates, which for an HTTPRoute usually means an
+    # authentication filter on the Gateway.
+    enabled: false
+    # issuer: https://idp.example.com/realms/ops
+    # client_id: vlui
+    # client_secret: ""
+    # redirect_url: https://logs.example.com/api/auth/callback
+    # cookie_secret: ""          # openssl rand -hex 32
+    # allowed_groups: [noc]
+
+  # Icons in the left rail. Each scopes the session to a slice of the logs, and
+  # the filter is applied by the server on every request.
+  # tools:
+  #   - tooltip: main
+  #     icon: gear
+  #   - tooltip: Yeti Logs
+  #     icon: yeti
+  #     query: 'named_tags.system: yeti'
+
+  metrics:
+    listen: 0.0.0.0:9108
+    path: /metrics
+    probe_interval: 15s
+
+# Bring your own ConfigMap holding the complete config.yml, instead of rendering
+# one from `config` above — for a config templated by something else (Ansible,
+# Kustomize, an operator).
+#
+# The chart then stops managing the config entirely: no checksum annotation, so
+# editing that ConfigMap does NOT roll the pods and vlui keeps running on what
+# it read at startup. Restart it yourself:
+#
+#   kubectl rollout restart deploy/<release>-vlui
+existingConfigMap: ""
+existingConfigMapKey: config.yml
+
+# ---------------------------------------------------------------------------
+# Service
+#
+# ClusterIP with two ports. The metrics port is on the Service for
+# completeness; the PodMonitor below does not use it — it scrapes pods.
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# HTTPRoute (Gateway API) — not an Ingress.
+#
+# Requires the Gateway API CRDs (gateway.networking.k8s.io/v1) and a Gateway to
+# attach to. This chart does not install either.
+#
+#   httpRoute:
+#     enabled: true
+#     parentRefs:
+#       - name: external
+#         namespace: gateway-system
+#         sectionName: https
+#     hostnames:
+#       - logs.example.com
+# ---------------------------------------------------------------------------
+httpRoute:
+  enabled: false
+  annotations: {}
+  labels: {}
+
+  # The Gateway(s) to attach to. Required when enabled — a route with no parent
+  # is accepted by the API server and routes nothing, which is the least
+  # helpful failure available, so the template refuses it instead.
+  parentRefs: []
+  #  - name: external
+  #    namespace: gateway-system
+  #    sectionName: https
+
+  hostnames: []
+  #  - logs.example.com
+
+  # Path prefix to match. Empty follows config.base_path — which is what you
+  # want, because that is the prefix the application itself serves under.
+  #
+  # Serving at a prefix WITHOUT setting config.base_path needs a URLRewrite
+  # filter to strip it, or the app sees paths it does not recognise; put that in
+  # `filters` below. Setting base_path is the simpler half of that choice.
+  pathPrefix: ""
+
+  # Extra filters on the rule — a URLRewrite, a RequestHeaderModifier, or
+  # whatever your Gateway implementation offers for authentication.
+  filters: []
+
+  # Live tailing is a long-lived streaming response. Most Gateway
+  # implementations default to a request timeout that would cut it; this is
+  # applied as the rule's timeout when set, and should be at least
+  # config.victorialogs.tail_max_duration.
+  timeouts:
+    request: 0s        # 0s disables the timeout entirely
+    backendRequest: 0s
+
+# ---------------------------------------------------------------------------
+# PodMonitor (Prometheus Operator) — not a ServiceMonitor.
+#
+# It scrapes the pod IP on the metrics port directly, which is the reason
+# metrics.listen is forced to 0.0.0.0: a loopback listener has no address a
+# scraper could reach.
+#
+# Requires the monitoring.coreos.com CRDs. Whether your Prometheus picks the
+# PodMonitor up depends on its podMonitorSelector — most deployments need a
+# release label here, e.g. `labels: {release: kube-prometheus-stack}`.
+# ---------------------------------------------------------------------------
+podMonitor:
+  enabled: false
+  labels: {}
+  annotations: {}
+  interval: 30s
+  scrapeTimeout: 10s
+  relabelings: []
+  metricRelabelings: []
+
+# ---------------------------------------------------------------------------
+# Pod
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+# The image is distroless:nonroot, so it already runs as 65532. Stated here
+# anyway: a cluster with a restricted PodSecurity policy demands runAsNonRoot be
+# explicit, and it must not depend on the image's own metadata.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  # vlui writes nothing: no database, no cache, no session store. The one thing
+  # that would need a writable path is a temp file, and it makes none.
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# Startup is a config parse and, when auth is on, OIDC discovery — which talks
+# to the IdP and can be slow. The startup probe is what gives that room without
+# making the liveness probe forgiving forever.
+startupProbe:
+  httpGet:
+    path: ""        # filled in from base_path
+    port: http
+  failureThreshold: 30
+  periodSeconds: 2
+
+livenessProbe:
+  httpGet:
+    path: ""
+    port: http
+  periodSeconds: 20
+  timeoutSeconds: 3
+
+readinessProbe:
+  httpGet:
+    path: ""
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 3
+
+updateStrategy:
+  type: RollingUpdate
+
+podAnnotations: {}
+podLabels: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# Off by default: it only makes sense above one replica, and a PDB with
+# replicas=1 blocks node drains.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1

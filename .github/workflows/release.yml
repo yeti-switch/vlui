@@ -182,3 +182,56 @@ jobs:
             org.opencontainers.image.source=https://github.com/yeti-switch/vlui
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    # The chart's default image is ghcr.io/yeti-switch/vlui:<appVersion>, and
+    # the release sets appVersion to this tag — so publishing the chart before
+    # the image would ship a chart whose default pull does not exist.
+    needs: docker
+    permissions:
+      contents: write # attach the .tgz to the release
+      packages: write # `helm push` to ghcr.io
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: azure/setup-helm@v4
+        with:
+          # Pinned to what the chart is developed and validated against.
+          version: v4.2.3
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Lint chart
+        run: helm lint charts/vlui
+
+      # Chart.yaml carries 0.0.0 placeholders so `helm lint` has valid SemVer to
+      # work with locally; the tag is what ships. version == appVersion, so
+      # chart 1.4.0 runs vlui 1.4.0 with no values needed.
+      - name: Package chart
+        run: |
+          helm package charts/vlui \
+            --version "${{ steps.version.outputs.version }}" \
+            --app-version "${{ steps.version.outputs.version }}"
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ghcr.io \
+              -u "${{ github.actor }}" \
+              --password-stdin
+
+      # OCI, in the same registry as the image: one place to authenticate, one
+      # place to mirror. Lands at oci://ghcr.io/yeti-switch/charts/vlui.
+      - name: Push chart to GHCR
+        run: |
+          helm push "vlui-${{ steps.version.outputs.version }}.tgz" \
+            "oci://ghcr.io/${{ github.repository_owner }}/charts"
+
+      - name: Attach chart to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vlui-${{ steps.version.outputs.version }}.tgz

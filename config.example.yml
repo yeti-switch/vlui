@@ -214,6 +214,8 @@ auth:
 # queries_active, tail_sessions_active, build_info, and the usual
 # go_*/process_* series.
 metrics:
+  # Naming an address is what turns the exporter on. Everything below it is read
+  # only when this is set.
   listen: 127.0.0.1:9108
   path: /metrics
 

@@ -28,6 +28,50 @@ func TestEmptyPathYieldsDefaults(t *testing.T) {
 	if cfg.Listen != "127.0.0.1:8080" {
 		t.Errorf("listen = %q", cfg.Listen)
 	}
+	// The exporter is opt-in: a config that never mentions metrics must not
+	// open a second socket.
+	if cfg.Metrics.Listen != "" {
+		t.Errorf("metrics.listen = %q, want empty — the exporter must be off unless asked for", cfg.Metrics.Listen)
+	}
+}
+
+// Three ways of not asking for an exporter, all of which must mean the same
+// thing. The middle one is the trap: a `metrics:` block present for its path or
+// probe interval, with no address, is still not a request for a listener.
+func TestMetricsIsOptional(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"no metrics block", "listen: 127.0.0.1:8080\n"},
+		{"block without listen", "metrics:\n  path: /metrics\n  probe_interval: 30s\n"},
+		{"listen explicitly empty", "metrics:\n  listen: \"\"\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.Load(write(t, tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Metrics.Listen != "" {
+				t.Errorf("metrics.listen = %q, want empty", cfg.Metrics.Listen)
+			}
+		})
+	}
+
+	// And naming an address turns it on, keeping the other defaults.
+	cfg, err := config.Load(write(t, "metrics:\n  listen: 127.0.0.1:9108\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Metrics.Listen != "127.0.0.1:9108" {
+		t.Errorf("metrics.listen = %q", cfg.Metrics.Listen)
+	}
+	if cfg.Metrics.Path != "/metrics" {
+		t.Errorf("metrics.path = %q, want the default to survive", cfg.Metrics.Path)
+	}
+	if cfg.Metrics.ProbeInterval == 0 {
+		t.Error("metrics.probe_interval lost its default")
+	}
 }
 
 // A misspelled key is otherwise a silent no-op, and the operator finds out when

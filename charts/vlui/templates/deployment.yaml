@@ -1,0 +1,113 @@
+{{- include "vlui.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vlui.fullname" . }}
+  labels:
+    {{- include "vlui.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "vlui.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- if not .Values.existingConfigMap }}
+        # Roll the pods when the config changes — a ConfigMap mount does not
+        # trigger a restart, and vlui reads its config once at startup.
+        checksum/config: {{ include "vlui.renderedConfig" . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "vlui.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "vlui.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: vlui
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - "-config"
+            - "/etc/vlui/config.yml"
+          ports:
+            - name: http
+              containerPort: {{ include "vlui.httpPort" . }}
+              protocol: TCP
+            {{- if include "vlui.metricsPort" . }}
+            # Named `metrics`, which is the name the PodMonitor scrapes by.
+            - name: metrics
+              containerPort: {{ include "vlui.metricsPort" . }}
+              protocol: TCP
+            {{- end }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- $probe := deepCopy . }}
+            {{- $_ := set $probe.httpGet "path" (include "vlui.healthPath" $) }}
+            {{- toYaml $probe | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- $probe := deepCopy . }}
+            {{- $_ := set $probe.httpGet "path" (include "vlui.healthPath" $) }}
+            {{- toYaml $probe | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- $probe := deepCopy . }}
+            {{- $_ := set $probe.httpGet "path" (include "vlui.healthPath" $) }}
+            {{- toYaml $probe | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/vlui
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "vlui.configMapName" . }}
+            # 0444, not 0400. Kubelet writes these files owned by root, with the
+            # group set to fsGroup — so a mode with no group or other read bit
+            # is unreadable by a container running as 65532, and the pod dies at
+            # startup with "permission denied" on its own config.
+            defaultMode: 0444
+            items:
+              - key: {{ include "vlui.configMapKey" . }}
+                path: config.yml
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

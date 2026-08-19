@@ -28,7 +28,7 @@ type Config struct {
 	ClientSecret string `yaml:"client_secret"`
 
 	// RedirectURL must be registered with the provider and must match exactly,
-	// including the base path: https://stats.example/stats/api/auth/callback
+	// including the base path: https://logs.example.com/logs/api/auth/callback
 	RedirectURL string `yaml:"redirect_url"`
 
 	// Scopes defaults to openid, profile, email.
@@ -79,6 +79,18 @@ type Config struct {
 	// anyone the IdP knows can read every log line this tenant holds.
 	AllowedGroups []string `yaml:"allowed_groups"`
 	GroupsClaim   string   `yaml:"groups_claim"`
+}
+
+// Validate reports whether this configuration could start, without contacting
+// the provider. It is what `vlui -check-config` calls: the deeper checks live
+// in New, which also performs OIDC discovery, and a config check that needed a
+// reachable IdP would be useless in exactly the moment you want it — before a
+// restart, or in CI.
+//
+// The receiver is a copy, so filling in defaults here cannot affect the caller.
+func (c Config) Validate() error {
+	c.applyDefaults()
+	return c.validate()
 }
 
 func (c *Config) applyDefaults() {

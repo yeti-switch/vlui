@@ -30,6 +30,11 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
   rather than about what the browser survives. Click a row to open every field
   beside it; from there, filter to a value, exclude it, or promote it to a
   column.
+- **Timestamps in your timezone** — `_time`, and any other field carrying an
+  ISO-8601 instant, follow the zone selected in the rail, with the untouched
+  value one hover away. A value with no zone (`2026-08-19 10:00:00`) is left
+  exactly as stored: nothing here knows which clock the producer was on, and
+  converting it would invent an offset.
 - **Hits histogram** — how many logs matched over the window, in buckets chosen
   to be round numbers. Drag across it to zoom into a range.
 - **Field sidebar** — the most frequent values per field across the current
@@ -48,46 +53,19 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
   theme, the build version, and the signed-in user with Sign out. Both
   preferences are remembered per browser.
 - **OIDC login** — any conformant provider; optionally restricted to a group.
-- **Prometheus exporter**, built in, on its own port.
+- **Prometheus exporter**, built in, on its own port — optional, and off until
+  you name a listen address.
 
 ## Installing
 
-### Debian
-
 ```sh
-apt install vlui
-cp /opt/vlui/etc/config.example.yml /opt/vlui/etc/config.yml
-$EDITOR /opt/vlui/etc/config.yml       # at least: victorialogs.url
-systemctl enable --now vlui
+apt install vlui                                    # Debian
+docker run ghcr.io/yeti-switch/vlui:latest          # container
+helm install vlui oci://ghcr.io/yeti-switch/charts/vlui   # Kubernetes
 ```
 
-The unit runs with `DynamicUser=yes` and reads the config through
-`LoadCredential=`, so the file stays `0600 root:root` and no account is created.
-Nothing is written to disk at runtime — there is nothing to back up.
-
-Put nginx in front of it for TLS. Live tailing is a stream, so turn buffering
-off for the location:
-
-```nginx
-location / {
-  proxy_pass http://127.0.0.1:8080;
-  proxy_set_header Host $host;
-  proxy_set_header X-Forwarded-Proto https;
-  proxy_buffering off;
-  proxy_read_timeout 1h;   # a live tail is a long-lived response
-}
-```
-
-### Container
-
-```sh
-docker run --rm -p 8080:8080 -p 9108:9108 \
-  -v ./config.yml:/opt/vlui/etc/config.yml:ro \
-  ghcr.io/yeti-switch/vlui:latest
-```
-
-The image is `gcr.io/distroless/static-debian13:nonroot`: no shell, no package
-manager, no libc — about 2 MB of base under a static binary.
+Each needs a config file and a little setup — nginx or a Gateway in front, and
+`victorialogs.url` pointing at something. See **[INSTALL.md](INSTALL.md)**.
 
 ## Configuring
 
@@ -95,13 +73,19 @@ Everything lives in one file; `config.example.yml` documents every key. The
 minimum is where VictoriaLogs is:
 
 ```yaml
-listen: 127.0.0.1:8080
-
 victorialogs:
   url: http://127.0.0.1:9428
+```
+
+That is the whole file. `listen` defaults to `127.0.0.1:8080`, and everything
+else is off until you ask for it — no authentication, no tools, and no
+Prometheus exporter:
+
+```yaml
+listen: 0.0.0.0:8080        # a container must not listen on loopback
 
 metrics:
-  listen: 127.0.0.1:9108
+  listen: 127.0.0.1:9108    # naming an address is what turns the exporter on
 ```
 
 Turning on authentication needs an OIDC client and a cookie key:
@@ -185,55 +169,17 @@ who can reach VictoriaLogs directly — keep that on loopback or behind vmauth.
 
 ## Metrics
 
-Served on `metrics.listen`, never on the application port — that one sits behind
-OIDC and may sit under a base path, and a scraper should have to care about
-neither.
-
-| metric | what it says |
-| --- | --- |
-| `vlui_vl_up` | the last health probe of VictoriaLogs. Only exported when `probe_interval` is set |
-| `vlui_vl_requests_total{endpoint,status}` | upstream calls, by endpoint and outcome |
-| `vlui_vl_request_duration_seconds{endpoint}` | time to response headers (time-to-first-byte for the streams) |
-| `vlui_http_requests_total{route,status}` | requests served, by chi route pattern |
-| `vlui_query_rows_total`, `vlui_query_bytes_total` | log volume forwarded to browsers |
-| `vlui_queries_active`, `vlui_tail_sessions_active` | what is open right now |
-| `vlui_build_info{version,commit}` | always 1 |
-
-`vl_up` is kept fresh by a background probe rather than by the scrape: a hung
-VictoriaLogs would otherwise hang the scrape and take every other metric down
-with it, exactly when they are needed. Set `probe_interval: 0` to drop both the
-probe and the gauge and alert on the error rate instead.
+A Prometheus exporter is built in, on its own listener — optional, and off
+until `metrics.listen` names an address. See **[METRICS.md](METRICS.md)** for
+what is exported, why `vl_up` is probed in the background, and alerting rules.
 
 ## Developing
 
 ```sh
-make dev        # the Go process on :8080, against ./config.yml
+make dev        # the Go API on :8080, against ./config.yml
 make dev-web    # Vite on :5173 with HMR, proxying /api to it
 make check      # gofmt, go vet, go test, and the SPA type-check + build
-make build      # SPA + binary, as it ships
 ```
 
-The SPA is embedded with `go:embed`, so `web/dist` must exist before the Go
-build: `make build` does both in order, and `make build-go` reuses whatever is
-already built.
-
-## How it fits together
-
-```
-browser ──► vlui ──► VictoriaLogs
-             │
-             └────► /metrics  (own listener)
-```
-
-The Go side is a thin, opinionated wrapper: it validates and clamps the
-parameters, adds the tenant headers, and forwards the answer as it arrives.
-Nothing is stored, cached or aggregated.
-
-- `POST /api/query` streams NDJSON as VictoriaLogs finds it, so the table fills
-  while the query is still running. Closing the connection abandons the query at
-  the far end. A failure after the first row can no longer change the status
-  code, so it arrives as a final `{"_vlui_error": "…"}` line.
-- `GET /api/tail` is the same stream re-framed as SSE, bounded by
-  `tail_max_duration`; the browser reconnects by itself.
-- Upstream error text is passed through verbatim. A LogsQL syntax error names
-  the offending token, and any wording of ours would be strictly less useful.
+See **[DEVELOPING.md](DEVELOPING.md)** for the layout, a VictoriaLogs to develop
+against, the chart checks and how a release is cut.

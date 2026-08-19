@@ -1,0 +1,44 @@
+{{- if .Values.podMonitor.enabled }}
+{{- if not (include "vlui.metricsPort" .) }}
+{{- fail "podMonitor.enabled is true but config.metrics.listen is empty — there is no exporter to scrape" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "vlui.fullname" . }}
+  labels:
+    {{- include "vlui.labels" . | nindent 4 }}
+    {{- with .Values.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.podMonitor.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "vlui.selectorLabels" . | nindent 6 }}
+  # Explicit rather than relying on the Prometheus resource's own default: a
+  # PodMonitor that silently matched pods in every namespace would scrape a
+  # second release of this chart as if it were this one.
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  podMetricsEndpoints:
+    # By port NAME, so this keeps working when config.metrics.listen changes
+    # port — the name is what the container declares.
+    - port: metrics
+      path: {{ include "vlui.metricsPath" . }}
+      interval: {{ .Values.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.podMonitor.scrapeTimeout }}
+      scheme: http
+      {{- with .Values.podMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

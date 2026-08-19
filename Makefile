@@ -14,6 +14,11 @@ all: build
 .PHONY: web
 web:
 	cd web && npm ci && npm run build
+	# Vite empties dist/ on every build, .gitkeep included. It has to come back:
+	# dist/ is otherwise absent in a fresh clone (its contents are gitignored),
+	# and `go:embed all:dist` fails outright on a missing directory — so a clone
+	# of this repo would not compile until someone ran the SPA build.
+	touch web/dist/.gitkeep
 
 ## build: build the SPA, then bake it into a single binary
 .PHONY: build
@@ -53,6 +58,17 @@ dev:
 .PHONY: dev-web
 dev-web:
 	cd web && npm run dev
+
+## chart-check: lint the chart, then prove the config it renders is one the
+## binary accepts — config.Load rejects unknown keys, so a chart that invented
+## one would be a CrashLoopBackOff rather than a warning.
+.PHONY: chart-check
+chart-check: build-go
+	helm lint charts/vlui
+	helm template t charts/vlui \
+		| awk '/^  config.yml: \|/{f=1;next} /^[^ ]/{f=0} f{sub(/^    /,"");print}' \
+		> /tmp/vlui-chart-config.yml
+	./$(BIN) -config /tmp/vlui-chart-config.yml -check-config
 
 .PHONY: clean
 clean:

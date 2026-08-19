@@ -56,16 +56,19 @@ function round1(n: number): string {
 //
 // activeTZ is read here rather than passed in, so every caller that formats
 // inside a template or a computed re-renders by itself when the zone changes.
-export function formatStamp(ms: number): string {
+export function formatStamp(ms: number, millis = true): string {
   if (!Number.isFinite(ms)) return ''
   const d = new Date(ms)
   if (Number.isNaN(d.getTime())) return ''
 
   const p = partsIn(activeTZ.value, d)
   if (!p) return ''
+
+  const stamp = `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
+  if (!millis) return stamp
   // Milliseconds are the same in every zone, so they come straight off the
   // instant; Intl would not give them anyway.
-  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}.${String(d.getMilliseconds()).padStart(3, '0')}`
+  return `${stamp}.${String(d.getMilliseconds()).padStart(3, '0')}`
 }
 
 interface ZonedParts {
@@ -129,6 +132,37 @@ export function parseLogTime(value: string | undefined): number {
   if (!Number.isNaN(ms)) return ms
   const trimmed = value.replace(/(\.\d{3})\d+/, '$1')
   return Date.parse(trimmed)
+}
+
+// An ISO-8601 instant: a date, a time, and — the part that matters — a zone,
+// either "Z" or an explicit offset.
+//
+// The zone designator is what makes this safe to reformat. A value like
+// "2026-08-19T07:44:44Z" names a moment in time, so showing it in the reader's
+// selected zone is a change of presentation. A bare "2026-08-19 10:00:00" does
+// not: it is whatever clock the producer was on, nobody here knows which, and
+// "converting" it would invent an offset and quietly report the wrong time.
+// Those are left exactly as they arrived.
+const INSTANT =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/
+
+// formatIfInstant renders a log field in the selected timezone when — and only
+// when — the value is unambiguously an instant. Anything else comes back null,
+// and the caller shows the raw string.
+//
+// This exists because _time is not the only timestamp in a log line. Producers
+// carry their own: a `timestamp` field, an upstream's `time`, a tag copied off
+// a SIP message. Those are the fields somebody is comparing against _time when
+// they change the timezone, and leaving them in the producer's zone makes the
+// selector look broken.
+export function formatIfInstant(raw: string): string | null {
+  if (!INSTANT.test(raw)) return null
+  const ms = parseLogTime(raw)
+  if (Number.isNaN(ms)) return null
+  // Milliseconds only if the source had them. Rendering "10:47:01.000" for a
+  // value written as "10:47:01Z" would claim the event landed on the second,
+  // which the producer never said.
+  return formatStamp(ms, raw.includes('.'))
 }
 
 // <input type="datetime-local"> has no concept of a zone: it shows and returns

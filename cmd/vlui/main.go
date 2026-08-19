@@ -46,6 +46,7 @@ func run() error {
 	var (
 		configPath  = flag.String("config", "", "path to the YAML configuration file")
 		showVersion = flag.Bool("version", false, "print the version and exit")
+		checkConfig = flag.Bool("check-config", false, "load and validate the configuration, then exit")
 		debug       = flag.Bool("debug", false, "log at debug level")
 	)
 	flag.Parse()
@@ -66,12 +67,38 @@ func run() error {
 		return err
 	}
 
+	// Parse and validate only. Useful before a restart — and the only way the
+	// Helm chart can prove that the config it renders is one this binary
+	// accepts, since config.Load rejects unknown keys and a chart that invented
+	// one would be a CrashLoopBackOff rather than a warning.
+	//
+	// It deliberately does NOT reach the network: no OIDC discovery, no
+	// VictoriaLogs. It answers "is this file right", not "is the world up".
+	if *checkConfig {
+		// config.Load does not look inside the auth block — the rules live with
+		// the OIDC code that uses them. Without this, a cookie_secret too short
+		// to start would still be reported OK, which is worse than no check.
+		if cfg.Auth.Enabled {
+			if err := cfg.Auth.Validate(); err != nil {
+				return err
+			}
+		}
+		fmt.Printf("config OK: %s\n", describe(cfg))
+		return nil
+	}
+
 	// Signals first, so a Ctrl-C during OIDC discovery is honoured rather than
 	// waiting out the IdP's timeout.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	m := metrics.New(version, commit)
+	// Nil when the exporter is off, which every method on *Metrics is written to
+	// tolerate — so "no metrics" costs no branches at the call sites and no
+	// registry in memory, rather than a registry nothing can read.
+	var m *metrics.Metrics
+	if cfg.Metrics.Listen != "" {
+		m = metrics.New(version, commit)
+	}
 
 	client := vl.New(vl.Options{
 		URL:       cfg.VictoriaLogs.URL,
@@ -108,14 +135,21 @@ func run() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	go func() {
-		if err := m.Serve(ctx, cfg.Metrics.Listen, cfg.Metrics.Path, log); err != nil {
-			// The exporter failing must not take the application down: losing
-			// metrics is an observability outage, not a service outage.
-			log.Error("metrics listener stopped", "err", err)
-		}
-	}()
-	go m.Probe(ctx, cfg.Metrics.ProbeInterval, client.Ping, log)
+	if m != nil {
+		go func() {
+			if err := m.Serve(ctx, cfg.Metrics.Listen, cfg.Metrics.Path, log); err != nil {
+				// The exporter failing must not take the application down:
+				// losing metrics is an observability outage, not a service one.
+				log.Error("metrics listener stopped", "err", err)
+			}
+		}()
+		// Only alongside the exporter: the probe exists to keep vlui_vl_up
+		// fresh, and with nothing serving the gauge it would be a request to
+		// VictoriaLogs every interval that nobody could ever read.
+		go m.Probe(ctx, cfg.Metrics.ProbeInterval, client.Ping, log)
+	} else {
+		log.Info("metrics exporter disabled (metrics.listen is not set)")
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -185,6 +219,21 @@ func securityHeaders(next http.Handler) http.Handler {
 				"connect-src 'self'; frame-ancestors 'none'; base-uri 'self'")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// describe is the one-line summary -check-config prints: enough to see which
+// file was actually read, without echoing any of its secrets.
+func describe(cfg config.Config) string {
+	auth := "auth off"
+	if cfg.Auth.Enabled {
+		auth = "auth on"
+	}
+	metrics := cfg.Metrics.Listen
+	if metrics == "" {
+		metrics = "off"
+	}
+	return fmt.Sprintf("listen %s, base_path %q, victorialogs %s, %s, metrics %s, %d tool(s)",
+		cfg.Listen, cfg.BasePath, cfg.VictoriaLogs.URL, auth, metrics, len(cfg.Tools))
 }
 
 func versionString() string {

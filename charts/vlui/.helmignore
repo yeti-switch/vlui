@@ -1,0 +1,9 @@
+.DS_Store
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+*.tgz
+OWNERS
+README.md.gotmpl

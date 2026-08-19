@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { formatStamp, parseLogTime } from '../time'
+import { formatIfInstant, formatStamp, parseLogTime } from '../time'
 import type { LogRow } from '../types'
 
 const props = defineProps<{ row: LogRow }>()
@@ -22,9 +22,17 @@ const fields = computed(() => {
 
 function display(field: string): string {
   const raw = props.row[field] ?? ''
-  if (field !== '_time') return raw
-  const ms = parseLogTime(raw)
-  return Number.isNaN(ms) ? raw : `${formatStamp(ms)}  (${raw})`
+
+  if (field === '_time') {
+    const ms = parseLogTime(raw)
+    return Number.isNaN(ms) ? raw : `${formatStamp(ms)}  (${raw})`
+  }
+
+  // Same treatment for any other field carrying an instant, and the same
+  // parenthesised original: this pane is where somebody checks what was
+  // actually stored, so the raw value is never replaced, only accompanied.
+  const zoned = formatIfInstant(raw)
+  return zoned ? `${zoned}  (${raw})` : raw
 }
 
 const copied = ref(false)

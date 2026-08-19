@@ -139,14 +139,23 @@ type Tenant struct {
 type Metrics struct {
 	// Listen is the exporter's own socket — never a route on the app above,
 	// which sits behind OIDC and may sit under base_path. A scraper should not
-	// have to care about either. Empty disables the exporter entirely.
+	// have to care about either.
+	//
+	// Empty, which is the DEFAULT, means no exporter: no second socket, no
+	// registry, and no health probe of VictoriaLogs. Opting in by naming an
+	// address is deliberate — a process should not open a port nobody asked
+	// for, and a deployment with no Prometheus has nothing to scrape it.
 	Listen string `yaml:"listen"`
 	Path   string `yaml:"path"`
 
 	// ProbeInterval is how often VictoriaLogs is pinged to keep vlui_vl_up
-	// fresh. It exists because the gauge has to mean something on an idle
-	// instance: updated only by user queries, it would report the state of
-	// whenever somebody last looked.
+	// fresh. Read only when the exporter is on — there is nowhere for the gauge
+	// to be read from otherwise, and probing for nobody is pure noise against
+	// VictoriaLogs.
+	//
+	// It exists because the gauge has to mean something on an idle instance:
+	// updated only by user queries, it would report the state of whenever
+	// somebody last looked.
 	//
 	// Probing on scrape instead would be worse — a hung VictoriaLogs would hang
 	// the scrape and take every other metric down with it, exactly when they
@@ -166,8 +175,10 @@ func Default() Config {
 			DefaultRange:    time.Hour,
 			TailMaxDuration: time.Hour,
 		},
+		// No listen address by default: the exporter is opt-in, so a config
+		// that never mentions metrics opens no second socket. The other two
+		// only matter once a listen address turns it on.
 		Metrics: Metrics{
-			Listen:        "127.0.0.1:9108",
 			Path:          "/metrics",
 			ProbeInterval: 15 * time.Second,
 		},

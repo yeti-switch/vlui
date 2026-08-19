@@ -1,0 +1,61 @@
+vlui {{ .Chart.AppVersion }} is installed as {{ include "vlui.fullname" . }}.
+
+Reading logs from: {{ .Values.config.victorialogs.url }}
+{{- if include "vlui.basePath" . }}
+Mounted under:     {{ include "vlui.basePath" . }}
+{{- end }}
+
+{{- if .Values.httpRoute.enabled }}
+{{- with .Values.httpRoute.hostnames }}
+
+  https://{{ index . 0 }}{{ include "vlui.basePath" $ }}/
+{{- end }}
+
+The HTTPRoute attaches to:
+{{- range .Values.httpRoute.parentRefs }}
+  - Gateway {{ .name }}{{ if .namespace }} in {{ .namespace }}{{ end }}{{ if .sectionName }} (listener {{ .sectionName }}){{ end }}
+{{- end }}
+
+Check it was accepted — a route the Gateway rejected still exists, it just
+routes nothing:
+
+  kubectl get httproute {{ include "vlui.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.status.parents[*].conditions[*]}{"\n"}'
+{{- else }}
+
+No HTTPRoute (httpRoute.enabled=false). To reach it:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "vlui.fullname" . }} 8080:{{ .Values.service.port }}
+
+then open http://127.0.0.1:8080{{ include "vlui.basePath" . }}/
+{{- end }}
+
+{{- if .Values.podMonitor.enabled }}
+
+A PodMonitor is installed. Prometheus only picks it up if its podMonitorSelector
+matches these labels — most kube-prometheus-stack deployments need a release
+label, which is podMonitor.labels in values. Verify it is being scraped:
+
+  kubectl get podmonitor {{ include "vlui.fullname" . }} -n {{ .Release.Namespace }}
+
+then look for the target in Prometheus. Series to expect: vlui_vl_up,
+vlui_vl_requests_total, vlui_http_requests_total, vlui_queries_active.
+{{- else }}
+
+No PodMonitor (podMonitor.enabled=false). Metrics are still served on the pod's
+metrics port at {{ include "vlui.metricsPath" . }}.
+{{- end }}
+
+{{- if not .Values.config.auth.enabled }}
+
+WARNING: authentication is off, so every request is anonymous. VictoriaLogs
+holds whatever your applications logged, which is usually more than it looks —
+put an authentication filter on the Gateway, or configure config.auth.
+{{- end }}
+
+{{- if and .Values.config.auth.enabled (not .Values.existingConfigMap) }}
+
+NOTE: config.yml lives in a ConfigMap, so auth.client_secret and
+auth.cookie_secret are readable by anything with namespace read access — and
+are in the release history and `helm get values` besides. Rotate cookie_secret
+if that is not what you intended; it also invalidates every session.
+{{- end }}

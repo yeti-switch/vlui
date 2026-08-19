@@ -1,0 +1,51 @@
+{{- if .Values.httpRoute.enabled }}
+{{- if not .Values.httpRoute.parentRefs }}
+{{- fail "httpRoute.enabled is true but httpRoute.parentRefs is empty — a route with no Gateway is accepted by the API server and routes nothing" }}
+{{- end }}
+{{- $base := include "vlui.basePath" . }}
+{{- $prefix := default $base .Values.httpRoute.pathPrefix | default "/" }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "vlui.fullname" . }}
+  labels:
+    {{- include "vlui.labels" . | nindent 4 }}
+    {{- with .Values.httpRoute.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.httpRoute.parentRefs | nindent 4 }}
+  {{- with .Values.httpRoute.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: {{ $prefix | quote }}
+      {{- with .Values.httpRoute.filters }}
+      filters:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.httpRoute.timeouts }}
+      # Live tailing is a response that stays open for as long as
+      # config.victorialogs.tail_max_duration. Gateway API's default request
+      # timeout would cut it, and the browser would reconnect in a loop.
+      timeouts:
+        {{- range $k, $v := . }}
+        {{- if $v }}
+        {{ $k }}: {{ $v | quote }}
+        {{- end }}
+        {{- end }}
+      {{- end }}
+      backendRefs:
+        - name: {{ include "vlui.fullname" . }}
+          port: {{ .Values.service.port }}
+          kind: Service
+{{- end }}

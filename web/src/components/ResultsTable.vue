@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { formatStamp, parseLogTime } from '../time'
+import { formatIfInstant, formatStamp, parseLogTime } from '../time'
 import type { LogRow } from '../types'
 
 const props = defineProps<{
@@ -57,7 +57,19 @@ function cell(row: LogRow, column: string): string {
     const ms = parseLogTime(raw)
     return Number.isNaN(ms) ? raw : formatStamp(ms)
   }
-  return raw
+  // Any other field that carries an instant is shown in the same zone: two
+  // timestamps side by side on one row must be on one clock, or comparing them
+  // is a trap.
+  return formatIfInstant(raw) ?? raw
+}
+
+// The hover title, which is where the untouched value lives once a cell has
+// been reformatted — nothing is hidden, it is one hover away.
+function cellTitle(row: LogRow, column: string): string {
+  const raw = row[column]
+  if (raw === undefined) return ''
+  const shown = cell(row, column)
+  return shown === raw ? raw : `${shown}  (${raw})`
 }
 
 // The scroller's height is not known until it is laid out, and it changes with
@@ -100,7 +112,7 @@ function mounted(el: Element | null) {
           :style="{ gridTemplateColumns: gridTemplate }"
           @click="emit('select', start + i)"
         >
-          <div v-for="c in columns" :key="c" class="cell mono" :title="cell(row, c)">
+          <div v-for="c in columns" :key="c" class="cell mono" :title="cellTitle(row, c)">
             {{ cell(row, c) }}
           </div>
         </div>

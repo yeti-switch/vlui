@@ -1,0 +1,33 @@
+apiVersion: v2
+name: vlui
+description: Web UI for VictoriaLogs — LogsQL query line over a virtualised result table, with a hits histogram, field facets and live tailing. One binary, one YAML file, no database.
+type: application
+
+# Placeholders. The release workflow (.github/workflows/release.yml, the helm
+# job) overrides BOTH with the release tag via
+# `helm package --version <tag> --app-version <tag>`, so the published chart's
+# version == appVersion == the git release tag. These literals are only used by
+# local `helm lint` / `helm template`; keep them at 0.0.0 (valid SemVer — lint
+# runs before the override in CI). appVersion also feeds the image tag when
+# values.image.tag is empty, so locally it resolves to ghcr.io/.../vlui:0.0.0
+# unless you set image.tag.
+version: 0.0.0
+appVersion: "0.0.0"
+
+# 1.25 is where Gateway API's HTTPRoute can be installed as a stable CRD, and
+# this chart ships an HTTPRoute rather than an Ingress.
+kubeVersion: ">= 1.25.0-0"
+
+home: https://github.com/yeti-switch/vlui
+sources:
+  - https://github.com/yeti-switch/vlui
+maintainers:
+  - name: YETI Switch
+    email: dev@yeti-switch.org
+
+keywords:
+  - victorialogs
+  - logs
+  - logsql
+  - observability
+  - yeti

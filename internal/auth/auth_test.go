@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,8 +22,8 @@ func testAuth(t *testing.T, base string) *Auth {
 	cfg := Config{
 		Enabled:      true,
 		Issuer:       "https://idp.example",
-		ClientID:     "yeti-statistics",
-		RedirectURL:  "https://stats.example/api/auth/callback",
+		ClientID:     "vlui",
+		RedirectURL:  "https://logs.example/api/auth/callback",
 		CookieSecret: secret,
 	}
 	cfg.applyDefaults()
@@ -243,7 +244,7 @@ func TestLocalLogoutDoesNotTouchTheIdP(t *testing.T) {
 func TestProviderLogoutEndsTheIdPSession(t *testing.T) {
 	a := testAuth(t, "")
 	a.cfg.Logout = LogoutProvider
-	a.cfg.PostLogoutRedirectURL = "https://stats.example/stats/"
+	a.cfg.PostLogoutRedirectURL = "https://logs.example/stats/"
 	a.logoutURL = "https://idp.example/logout"
 
 	rec := logoutReq(t, a, true)
@@ -269,7 +270,7 @@ func TestProviderLogoutEndsTheIdPSession(t *testing.T) {
 	if q.Get("id_token_hint") != "the.id.token" {
 		t.Errorf("id_token_hint = %q, want the session's ID token", q.Get("id_token_hint"))
 	}
-	if q.Get("post_logout_redirect_uri") != "https://stats.example/stats/" {
+	if q.Get("post_logout_redirect_uri") != "https://logs.example/stats/" {
 		t.Errorf("post_logout_redirect_uri = %q", q.Get("post_logout_redirect_uri"))
 	}
 	if q.Get("client_id") != a.cfg.ClientID {
@@ -444,3 +445,48 @@ func TestSessionCookieIsHttpOnly(t *testing.T) {
 }
 
 var _ = context.Background
+
+// Validate is what `vlui -check-config` calls. It must catch what New would
+// reject, without needing a provider to talk to — the whole point is to be
+// usable before a restart and in CI.
+func TestValidateCatchesWhatWouldFailAtStartup(t *testing.T) {
+	good := Config{
+		Enabled:      true,
+		Issuer:       "https://idp.example",
+		ClientID:     "vlui",
+		RedirectURL:  "https://logs.example/api/auth/callback",
+		CookieSecret: secret,
+	}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("a usable config was rejected: %v", err)
+	}
+
+	cases := map[string]func(*Config){
+		"no issuer":       func(c *Config) { c.Issuer = "" },
+		"no client id":    func(c *Config) { c.ClientID = "" },
+		"no redirect url": func(c *Config) { c.RedirectURL = "" },
+		"short secret":    func(c *Config) { c.CookieSecret = "too short" },
+		"unknown logout":  func(c *Config) { c.Logout = "sometimes" },
+	}
+	for name, break_ := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := good
+			break_(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Error("want an error")
+			}
+		})
+	}
+
+	// Validating must not mutate the caller's config: it fills in defaults on a
+	// copy, and a Validate that wrote them back would make a check-then-use
+	// caller behave differently from one that skipped the check.
+	//
+	// Compared field by field rather than with ==: Config holds a []string, so
+	// it is not comparable.
+	before := fmt.Sprintf("%+v", good)
+	_ = good.Validate()
+	if after := fmt.Sprintf("%+v", good); after != before {
+		t.Errorf("Validate mutated its receiver:\n  before %s\n  after  %s", before, after)
+	}
+}
