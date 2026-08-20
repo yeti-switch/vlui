@@ -23,44 +23,18 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
 
 ## What it does
 
-- **Query line** — LogsQL, with autocomplete on field names and their values,
-  drawn from the same VictoriaLogs that answers the query. `Enter` runs,
-  `Shift+Enter` is a newline.
-- **Results table** — virtualised, so the row cap is about what is readable
-  rather than about what the browser survives. Click a row to open every field
-  beside it; from there, filter to a value, exclude it, or promote it to a
-  column.
-- **Timestamps in your timezone** — `_time`, and any other field carrying an
-  ISO-8601 instant, follow the zone selected in the rail, with the untouched
-  value one hover away. A value with no zone (`2026-08-19 10:00:00`) is left
-  exactly as stored: nothing here knows which clock the producer was on, and
-  converting it would invent an offset.
-- **Hits histogram** — how many logs matched over the window, in buckets chosen
-  to be round numbers. Drag across it to zoom into a range.
-- **Field sidebar** — the most frequent values per field across the current
-  selection, from `/select/logsql/facets`. One click adds the filter. It starts
-  collapsed to a rail, and stays collapsed until you open it: an open panel is
-  an extra facets query per run, so it is opt-in and the choice is remembered.
-- **Live tailing** — follow new logs as they arrive, over Server-Sent Events.
-- **Shareable state** — the query, the window, the row cap and the columns live
-  in the URL fragment, so a link to what you are looking at is the address bar.
-- **Tools** — configurable icons in the left rail, each scoping the whole
-  session to a slice of the logs. The tool's filter shows beside the query
-  input, and the **server** applies it on every request from the tool's id (see
-  below) — the browser never composes it. Each tool keeps its own query, so
-  switching between them returns you to what you were looking at.
-- **Left rail** — the tools, then timezone (display only: every request carries
-  instants, so changing it re-renders rather than re-queries), light/dark/system
-  theme, the build version, and the signed-in user with Sign out. Both
-  preferences are remembered per browser.
-- **OIDC login** — a login page with one button, then any conformant provider;
-  optionally restricted to a group, read from a configurable claim (`groups`, a
-  Zitadel role URN, a nested Keycloak path) in whatever shape that provider
-  sends. Signing out drops the cookie and returns you to that page rather than
-  bouncing back through an IdP that still has a session — as does a session that
-  expires while you are using it, live tail included.
-- **Prometheus exporter**, built in, on its own port — optional, and off until
-  you name a listen address.
+- **Query line** — LogsQL, with autocomplete on field names and values.
+- **Results table** — virtualised. Click a row to see every field; filter,
+  exclude, or promote one to a column.
+- **Hits histogram** — matches over the window. Drag to zoom.
+- **Field sidebar** — the most frequent values per field, one click to filter.
+- **Live tailing** — follow new logs as they arrive.
+- **Timestamps** in the timezone you pick.
+- **Tools** — configurable icons in the left rail, each scoping the session to a
+  slice of the logs. Applied server-side.
+- **Shareable state** — query, window, row cap and columns live in the URL.
+- **OIDC login** — any conformant provider.
+- **Prometheus exporter** — built in, optional.
 
 ## Installing
 
@@ -83,18 +57,8 @@ victorialogs:
   url: http://127.0.0.1:9428
 ```
 
-That is the whole file. `listen` defaults to `127.0.0.1:8080`, and everything
-else is off until you ask for it — no authentication, no tools, and no
-Prometheus exporter:
-
-```yaml
-listen: 0.0.0.0:8080        # a container must not listen on loopback
-
-metrics:
-  listen: 127.0.0.1:9108    # naming an address is what turns the exporter on
-```
-
-Turning on authentication needs an OIDC client and a cookie key:
+`listen` defaults to `127.0.0.1:8080`; everything else is off until you ask for
+it. Authentication needs an OIDC client:
 
 ```yaml
 auth:
@@ -103,29 +67,17 @@ auth:
   client_id: vlui
   client_secret: "…"
   redirect_url: https://logs.example.com/api/auth/callback
-  cookie_secret: "…"        # openssl rand -hex 32; empty generates one, see below
-  allowed_groups: [noc]     # authorisation, not just authentication
+  cookie_secret: "…"        # openssl rand -hex 32; empty generates one per process
+  allowed_groups: [noc]
+  # groups_claim: groups    # dotted path; see config.example.yml for Zitadel and Keycloak
 ```
 
-The session is a signed cookie carrying the user, which is what lets this
-application have no database. Rotating `cookie_secret` revokes every session.
-
-Leaving `cookie_secret` empty generates one at startup, which is fine for a
-trial and wrong for a deployment: every restart signs everyone out, and two
-instances generate two secrets, so behind a load balancer people are signed out
-on some requests and not others. The process warns when it generates one, and
-the Helm chart refuses to render an empty secret above one replica.
-
-`allowed_groups` reads from `groups_claim`, which defaults to `groups` and takes
-a dotted path for providers that nest — `urn:zitadel:iam:org:project:roles` for
-Zitadel, `resource_access.<client>.roles` for Keycloak client roles. The shape
-is handled for you: an array, an object whose keys are the names, or a single
-string. If a login is refused, run with `-debug`: the claims in the token and
-what was read from the configured one are logged.
+The session is a signed cookie, which is what lets this application have no
+database. Rotating `cookie_secret` revokes every session; leaving it empty
+generates one at startup, so restarts and extra replicas sign people out.
 
 **One instance reads one tenant.** `victorialogs.tenant` is fixed for the
-process, because which tenant is on show is a property of the deployment rather
-than of whoever is looking. To publish two, run two instances.
+process. To publish two, run two instances.
 
 ## Tools
 
@@ -137,50 +89,20 @@ tools:
   - tooltip: Yeti Logs
     icon: yeti
     query: 'named_tags.system: yeti'
-
-  - tooltip: API Logs
-    icon: bolt
-    query: 'system: api'
 ```
 
-Each entry becomes an icon in the rail, labelled on hover. Selecting one scopes
+Each entry is an icon in the rail, labelled on hover. Selecting one scopes
 everything — rows, histogram, facets, autocomplete, live tail — to its query,
-which is shown as a static prefix beside the input so what is in force is always
-on screen. A tool with no query, first in the list, is the usual "everything"
-entry.
+shown as a static prefix beside the input. Each tool keeps its own query, and a
+tool with a filter accepts an empty box.
 
-**Each tool remembers its own query.** A query written for one slice of the logs
-is usually meaningless against another, so switching tools swaps the box rather
-than carrying the text across, and switching back restores it. A tool you have
-not visited starts empty when it has a filter of its own, and at `*` when it
-does not. The memory lasts for the session; the URL carries the active tool's
-query, so links and reloads still work.
+Icons: `gear`, `yeti`, `bolt`, `bug`, `chart`, `cloud`, `database`, `globe`,
+`lock`, `phone`, `server`, `tag`, `terminal`.
 
-With a tool selected you can leave the query box **empty** — the tool's filter
-is the query, and "show me everything this tool covers" is usually the first
-thing you want. It becomes `*` upstream, still bounded by the tool's filter and
-the time range. An empty box with no tool filter in force stays an error: there
-would be nothing narrowing the read at all. Icons: `gear`, `yeti`, `bolt`, `bug`, `chart`, `cloud`, `database`,
-`globe`, `lock`, `phone`, `server`, `tag`, `terminal`.
-
-**Where it is applied, and why that matters.** The filter is applied by the
-server, from the tool's id, on every request. It is never composed in the
-browser — `/api/*` is reachable with curl by anyone holding a session cookie, so
-a prefix the SPA glues onto the query box could simply be left off the next
-request. For the same reason, a request naming no tool gets the **first** tool's
-filter rather than an unfiltered read.
-
-It reaches VictoriaLogs as `extra_filters`, which propagates into every subquery
-(`| join`, `| union`, `:in(...)`). A filter concatenated onto the front of the
-query would be escapable through a subquery; VictoriaLogs' own documentation
-names `extra_filters` as the mechanism for restricting queries to a subset of
-logs.
-
-**Is it access control?** Only if you configure it that way. By default any
-signed-in account may select any tool, which is right when the rail is a set of
-shortcuts. To make it a boundary: leave no unrestricted tool for someone to
-switch to, make the first tool a safe default, and gate the wide ones with
-`allowed_groups` (requires `auth.enabled`; matches `auth.groups_claim`):
+The filter is applied by the **server**, from the tool's id, as VictoriaLogs
+`extra_filters` — never composed in the browser, and a request naming no tool
+gets the first tool's filter. To make the rail a boundary rather than a set of
+shortcuts, gate the wide tools with `allowed_groups` (needs `auth.enabled`):
 
 ```yaml
   - tooltip: Billing
@@ -189,9 +111,8 @@ switch to, make the first tool a safe default, and gate the wide ones with
     allowed_groups: [billing, admin]
 ```
 
-A tool the account may not use is refused with 403 *and* omitted from
-`/api/config`, so it never appears in their rail. None of this restricts anyone
-who can reach VictoriaLogs directly — keep that on loopback or behind vmauth.
+Such a tool is refused with 403 and left out of `/api/config`. None of it
+restricts anyone who can reach VictoriaLogs directly.
 
 ## Metrics
 
