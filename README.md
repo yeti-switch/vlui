@@ -47,7 +47,8 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
 - **Tools** — configurable icons in the left rail, each scoping the whole
   session to a slice of the logs. The tool's filter shows beside the query
   input, and the **server** applies it on every request from the tool's id (see
-  below) — the browser never composes it.
+  below) — the browser never composes it. Each tool keeps its own query, so
+  switching between them returns you to what you were looking at.
 - **Left rail** — the tools, then timezone (display only: every request carries
   instants, so changing it re-renders rather than re-queries), light/dark/system
   theme, the build version, and the signed-in user with Sign out. Both
@@ -129,6 +130,13 @@ everything — rows, histogram, facets, autocomplete, live tail — to its query
 which is shown as a static prefix beside the input so what is in force is always
 on screen. A tool with no query, first in the list, is the usual "everything"
 entry.
+
+**Each tool remembers its own query.** A query written for one slice of the logs
+is usually meaningless against another, so switching tools swaps the box rather
+than carrying the text across, and switching back restores it. A tool you have
+not visited starts empty when it has a filter of its own, and at `*` when it
+does not. The memory lasts for the session; the URL carries the active tool's
+query, so links and reloads still work.
 
 With a tool selected you can leave the query box **empty** — the tool's filter
 is the query, and "show me everything this tool covers" is usually the first

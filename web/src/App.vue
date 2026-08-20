@@ -20,10 +20,33 @@ const query = ref('*')
    That is the whole point: /api/query is reachable with curl by anyone holding
    a session, so a filter composed here would be a suggestion. */
 const activeTool = ref('')
-const tool = computed<Tool | null>(() => {
+const tool = computed<Tool | null>(() => toolById(activeTool.value))
+
+function toolById(id: string): Tool | null {
   const tools = cfg.value?.tools ?? []
-  return tools.find((t) => t.id === activeTool.value) ?? tools[0] ?? null
-})
+  return tools.find((t) => t.id === id) ?? tools[0] ?? null
+}
+
+/* One query box per tool, remembered as you switch between them.
+   
+   The tools select different slices of the logs, so a query written for one is
+   usually meaningless against another — carrying "call_id:abc" from the SIP
+   tool over to the billing tool produces an empty table and a moment of
+   confusion. Each keeps its own, and switching back returns you to what you
+   were looking at.
+   
+   Session-scoped on purpose: the URL still carries the ACTIVE tool's query, so
+   links and reloads work, but a query typed on Tuesday does not reappear
+   unannounced on Friday. */
+const queriesByTool = ref<Record<string, string>>({})
+
+// What a tool's box starts with, before anything is typed into it. A tool that
+// carries a filter needs nothing: its filter is the query, and an empty box
+// means "everything this tool covers". One without a filter has to say
+// something, and LogsQL spells "everything" as *.
+function defaultQueryFor(t: Tool | null): string {
+  return t?.query ? '' : '*'
+}
 const range = ref<RangeSelection>({ kind: 'relative', seconds: 3600 })
 const limit = ref(500)
 
@@ -277,7 +300,15 @@ function toggleColumn(field: string) {
 // than leaving the previous tool's rows on screen under the new icon.
 function selectTool(id: string) {
   if (id === activeTool.value) return
+
+  // Whatever is in the box belongs to the tool being left, including an empty
+  // box — that is a deliberate state for a filtered tool, not an absence.
+  if (activeTool.value) queriesByTool.value[activeTool.value] = query.value
+
   activeTool.value = id
+  const remembered = queriesByTool.value[id]
+  query.value = remembered ?? defaultQueryFor(toolById(id))
+
   writeHash()
   run()
 }
@@ -334,7 +365,13 @@ function readHash(): boolean {
   // offered: a stale or invented id in a shared link falls back to the default
   // rather than erroring on every request.
   const wanted = p.get('tool')
-  if (wanted && (cfg.value?.tools ?? []).some((t) => t.id === wanted)) activeTool.value = wanted
+  if (wanted && (cfg.value?.tools ?? []).some((t) => t.id === wanted)) {
+    activeTool.value = wanted
+    // A link carrying a tool but no query means that tool's default, not the
+    // previous tool's default that was set a moment ago in onMounted.
+    if (!q) query.value = defaultQueryFor(toolById(wanted))
+  }
+  if (q && activeTool.value) queriesByTool.value[activeTool.value] = q
 
   const start = Number(p.get('start'))
   const end = Number(p.get('end'))
@@ -383,6 +420,9 @@ onMounted(async () => {
     // The first tool is the default, matching the server: a request that names
     // no tool gets the first one's filter, so the rail must agree.
     activeTool.value = c.tools[0]?.id ?? ''
+    // …and the box starts on that tool's default rather than a blanket *,
+    // which for a filtered tool would ask for everything twice over.
+    query.value = defaultQueryFor(toolById(activeTool.value))
   } catch (e) {
     // A 401 has already navigated to the IdP; anything else means the app
     // cannot start, and saying so beats an empty screen.
