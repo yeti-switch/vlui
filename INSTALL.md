@@ -78,7 +78,13 @@ podMonitor:
 The PodMonitor scrapes the pod IP directly, which is why the chart rewrites
 `listen` and `metrics.listen` to `0.0.0.0` (keeping your ports): the loopback
 defaults that are right on a systemd host are reachable from nothing inside a
-pod.
+pod. For the same reason the metrics port is on the container only and not on
+the Service — reach it with `kubectl port-forward deploy/…`.
+
+The chart creates no ServiceAccount either: vlui never calls the Kubernetes API,
+so the pod runs as the namespace default with its token unmounted. Set
+`serviceAccountName` if your cluster needs the workload to carry an identity —
+a service mesh derives one from the ServiceAccount — and create it yourself.
 
 `config:` in values is the same file documented in `config.example.yml`,
 rendered into a ConfigMap. To supply one templated elsewhere, name it instead —

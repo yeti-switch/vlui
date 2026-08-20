@@ -38,14 +38,6 @@ app.kubernetes.io/name: {{ include "vlui.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "vlui.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create -}}
-{{- default (include "vlui.fullname" .) .Values.serviceAccount.name -}}
-{{- else -}}
-{{- default "default" .Values.serviceAccount.name -}}
-{{- end -}}
-{{- end -}}
-
 {{/*
 configMapName / configMapKey: where config.yml comes from. Either the ConfigMap
 this chart renders from .Values.config, or one that already exists — which is

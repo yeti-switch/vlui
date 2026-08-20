@@ -18,14 +18,14 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-serviceAccount:
-  create: true
-  name: ""
-  annotations: {}
-  # vlui talks to nothing in the cluster API. A token mounted into the pod would
-  # be a credential with no purpose and a blast radius if the pod were
-  # compromised.
-  automountServiceAccountToken: false
+# vlui never calls the Kubernetes API, so the chart creates no ServiceAccount:
+# the pod runs as the namespace default and its token is never mounted — a
+# credential with no purpose is a credential with a blast radius.
+#
+# Name one here if your cluster needs this workload to carry an identity: a
+# service mesh derives one from the ServiceAccount, and cloud workload-identity
+# bindings annotate one. Create it yourself; the chart will not.
+serviceAccountName: ""
 
 # ---------------------------------------------------------------------------
 # The application config: config.example.yml in the repo, as YAML.

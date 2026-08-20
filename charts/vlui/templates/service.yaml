@@ -17,12 +17,3 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
-    {{- if include "vlui.metricsPort" . }}
-    # Present for a human with kubectl port-forward. Prometheus does not use it:
-    # the PodMonitor scrapes pods directly, which is also why a Service in front
-    # of several replicas cannot round-robin a scrape to the wrong one.
-    - name: metrics
-      port: {{ include "vlui.metricsPort" . }}
-      targetPort: metrics
-      protocol: TCP
-    {{- end }}

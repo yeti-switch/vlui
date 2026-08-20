@@ -39,10 +39,17 @@ label, which is podMonitor.labels in values. Verify it is being scraped:
 
 then look for the target in Prometheus. Series to expect: vlui_vl_up,
 vlui_vl_requests_total, vlui_http_requests_total, vlui_queries_active.
+{{- else if include "vlui.metricsPort" . }}
+
+No PodMonitor (podMonitor.enabled=false). Metrics are still served on the pod
+itself — not on the Service — at {{ include "vlui.metricsPath" . }}:
+
+  kubectl port-forward -n {{ .Release.Namespace }} deploy/{{ include "vlui.fullname" . }} {{ include "vlui.metricsPort" . }}:{{ include "vlui.metricsPort" . }}
 {{- else }}
 
-No PodMonitor (podMonitor.enabled=false). Metrics are still served on the pod's
-metrics port at {{ include "vlui.metricsPath" . }}.
+No metrics: config.metrics.listen is unset, so the exporter does not run. Give
+it an address to turn it on, then set podMonitor.enabled=true to have
+Prometheus scrape it.
 {{- end }}
 
 {{- if not .Values.config.auth.enabled }}

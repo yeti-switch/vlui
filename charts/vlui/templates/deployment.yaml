@@ -29,8 +29,18 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "vlui.serviceAccountName" . }}
-      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      # No ServiceAccount of its own: vlui never calls the Kubernetes API, so
+      # the pod runs as the namespace default with its token left unmounted.
+      # Nothing to present to the API server, and nothing to inherit if someone
+      # later binds a Role to that default.
+      #
+      # Set serviceAccountName here if your cluster needs the workload to carry
+      # an identity — a service mesh derives one from the SA, and cloud
+      # workload-identity bindings annotate one.
+      {{- with .Values.serviceAccountName }}
+      serviceAccountName: {{ . }}
+      {{- end }}
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -54,7 +64,10 @@ spec:
               containerPort: {{ include "vlui.httpPort" . }}
               protocol: TCP
             {{- if include "vlui.metricsPort" . }}
-            # Named `metrics`, which is the name the PodMonitor scrapes by.
+            # Named `metrics`, which is the name the PodMonitor scrapes by. Not
+            # on the Service: a PodMonitor addresses pods directly, and putting
+            # it behind a Service would only offer a load-balanced scrape that
+            # lands on a different replica each time.
             - name: metrics
               containerPort: {{ include "vlui.metricsPort" . }}
               protocol: TCP

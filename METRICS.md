@@ -95,8 +95,10 @@ probe is on by default.
 curl -s http://127.0.0.1:9108/metrics | grep '^vlui_'
 ```
 
-In a cluster, the exporter is on the pod rather than behind the Service's main
-port:
+In a cluster the exporter is on the pod only — it is deliberately not a Service
+port, since a PodMonitor addresses pods directly and a Service would just
+load-balance a scrape onto a different replica each time. So port-forward the
+deployment, not the service:
 
 ```sh
 kubectl port-forward deploy/vlui 9108:9108
