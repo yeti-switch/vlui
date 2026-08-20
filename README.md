@@ -53,7 +53,9 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
   instants, so changing it re-renders rather than re-queries), light/dark/system
   theme, the build version, and the signed-in user with Sign out. Both
   preferences are remembered per browser.
-- **OIDC login** — any conformant provider; optionally restricted to a group.
+- **OIDC login** — any conformant provider; optionally restricted to a group,
+  read from a configurable claim (`groups`, a Zitadel role URN, a nested
+  Keycloak path) in whatever shape that provider sends.
 - **Prometheus exporter**, built in, on its own port — optional, and off until
   you name a listen address.
 
@@ -104,6 +106,13 @@ auth:
 
 The session is a signed cookie carrying the user, which is what lets this
 application have no database. Rotating `cookie_secret` revokes every session.
+
+`allowed_groups` reads from `groups_claim`, which defaults to `groups` and takes
+a dotted path for providers that nest — `urn:zitadel:iam:org:project:roles` for
+Zitadel, `resource_access.<client>.roles` for Keycloak client roles. The shape
+is handled for you: an array, an object whose keys are the names, or a single
+string. If a login is refused, run with `-debug`: the claims in the token and
+what was read from the configured one are logged.
 
 **One instance reads one tenant.** `victorialogs.tenant` is fixed for the
 process, because which tenant is on show is a property of the deployment rather

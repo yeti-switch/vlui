@@ -1,6 +1,33 @@
 {{- if .Values.httpRoute.enabled }}
 {{- if not .Values.httpRoute.parentRefs }}
-{{- fail "httpRoute.enabled is true but httpRoute.parentRefs is empty — a route with no Gateway is accepted by the API server and routes nothing" }}
+{{- fail (printf "%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s"
+  "httpRoute.enabled is true but httpRoute.parentRefs is empty."
+  "parentRefs names the Gateway to attach this route to; there is no default. A route with no parent is accepted by the API server and then routes nothing, so this refuses to render instead."
+  "Find the Gateway:    kubectl get gateway -A"
+  "Then, in values:     httpRoute:"
+  "                       parentRefs:"
+  "                         - name: <gateway name>"
+  "                           namespace: <its namespace>   # omit if it is in this one"
+  "If you have no Gateway, you have no Gateway API installation to route with — set httpRoute.enabled=false and reach the Service another way.") }}
+{{- end }}
+{{/*
+Gateway API forbids a RequestRedirect filter on a rule that also has
+backendRefs — a rule cannot both answer a request and refuse to. This rule
+always has backendRefs (it is the route TO vlui), so the combination is rejected
+by the API server's own validation, and letting it through would only move the
+error from `helm template` to `helm install`.
+
+An HTTP→HTTPS redirect is a SEPARATE route, attached to the plaintext listener,
+with no backend at all — see httpRoute.redirParentRefs and
+redirect-httproute.yaml.
+*/}}
+{{- range .Values.httpRoute.filters }}
+{{- if eq (default "" .type) "RequestRedirect" }}
+{{- fail (printf "%s\n\n%s\n\n%s"
+  "httpRoute.filters contains a RequestRedirect, which Gateway API does not allow on a rule that has backendRefs — and this rule always has one, since it is the route to vlui."
+  "For HTTP->HTTPS set httpRoute.redirParentRefs to the plaintext listener, which emits a second route with no backend — the shape Gateway API requires."
+  "Everything else — URLRewrite, RequestHeaderModifier, ExtensionRef — is fine here.") }}
+{{- end }}
 {{- end }}
 {{- $base := include "vlui.basePath" . }}
 {{- $prefix := default $base .Values.httpRoute.pathPrefix | default "/" }}

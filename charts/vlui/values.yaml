@@ -154,7 +154,43 @@ httpRoute:
 
   # Extra filters on the rule — a URLRewrite, a RequestHeaderModifier, or
   # whatever your Gateway implementation offers for authentication.
+  #
+  # Not RequestRedirect: Gateway API forbids it on a rule that has backendRefs,
+  # and this one always does. Redirect HTTP->HTTPS at the Gateway listener, or
+  # with a second HTTPRoute of your own.
   filters: []
+
+  # An HTTP -> HTTPS redirect, as a SECOND route.
+  #
+  # It has to be its own object: Gateway API forbids a RequestRedirect filter on
+  # a rule that has backendRefs, and the main route above always has one. This
+  # route has no backend at all — it only answers a redirect.
+  #
+  # redirParentRefs is both the setting and the switch: naming the PLAINTEXT
+  # listener is the only thing the redirect route cannot be given a default for,
+  # so leaving it empty means no redirect route. There is no separate `enabled`
+  # to forget alongside it.
+  #
+  # Deliberately not inherited from parentRefs above: those point at the https
+  # listener, and a redirect attached there would answer 301 to traffic that is
+  # already secure, in a loop.
+  #
+  # Most Gateways can redirect at the listener instead, which is cheaper and
+  # covers every hostname at once. Use this when yours cannot, or when only this
+  # hostname should be redirected.
+  redirParentRefs: []
+  #  - name: external
+  #    namespace: gateway-system
+  #    sectionName: http
+
+  # Defaults to `hostnames` above, which is almost always right.
+  redirHostnames: []
+
+  # 301 permanent, or 302 temporary. 308 also preserves the method.
+  redirStatusCode: 301
+
+  # Only if https is not on 443.
+  redirPort: ""
 
   # Live tailing is a long-lived streaming response. Most Gateway
   # implementations default to a request timeout that would cut it; this is

@@ -11,6 +11,10 @@ Mounted under:     {{ include "vlui.basePath" . }}
   https://{{ index . 0 }}{{ include "vlui.basePath" $ }}/
 {{- end }}
 
+{{- if .Values.httpRoute.redirParentRefs }}
+Plain http on that hostname is redirected to https ({{ .Values.httpRoute.redirStatusCode }}).
+{{- end }}
+
 The HTTPRoute attaches to:
 {{- range .Values.httpRoute.parentRefs }}
   - Gateway {{ .name }}{{ if .namespace }} in {{ .namespace }}{{ end }}{{ if .sectionName }} (listener {{ .sectionName }}){{ end }}

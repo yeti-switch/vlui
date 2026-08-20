@@ -490,3 +490,125 @@ func TestValidateCatchesWhatWouldFailAtStartup(t *testing.T) {
 		t.Errorf("Validate mutated its receiver:\n  before %s\n  after  %s", before, after)
 	}
 }
+
+// Where the group names live and what shape they are in both vary by provider.
+// Reading only a flat array of strings is what made a Zitadel token — whose
+// roles are an OBJECT under a URN — look like an account in no groups at all.
+func TestClaimValuesAcrossProviders(t *testing.T) {
+	cases := []struct {
+		name   string
+		claim  string
+		claims map[string]any
+		want   []string
+	}{
+		{
+			name:  "flat array, the common case",
+			claim: "groups",
+			claims: map[string]any{
+				"groups": []any{"noc", "sre"},
+			},
+			want: []string{"noc", "sre"},
+		},
+		{
+			// The keys are the role names; the values say which organisation
+			// granted them and are not what we match on.
+			name:  "zitadel: object under a URN",
+			claim: "urn:zitadel:iam:org:project:roles",
+			claims: map[string]any{
+				"urn:zitadel:iam:org:project:roles": map[string]any{
+					"noc":   map[string]any{"178": "acme.zitadel.cloud"},
+					"admin": map[string]any{"178": "acme.zitadel.cloud"},
+				},
+			},
+			want: []string{"admin", "noc"}, // sorted, so it reads the same twice
+		},
+		{
+			name:  "keycloak: nested client roles",
+			claim: "resource_access.vlui.roles",
+			claims: map[string]any{
+				"resource_access": map[string]any{
+					"vlui": map[string]any{"roles": []any{"noc"}},
+				},
+			},
+			want: []string{"noc"},
+		},
+		{
+			// A name may contain a space or a comma, so a lone string is one
+			// group rather than a list to be split.
+			name:   "single string",
+			claim:  "groups",
+			claims: map[string]any{"groups": "network operations"},
+			want:   []string{"network operations"},
+		},
+		{
+			// The exact key wins over path traversal, or a provider whose claim
+			// name contains a dot would be unreachable.
+			name:  "literal key containing a dot",
+			claim: "acme.io/groups",
+			claims: map[string]any{
+				"acme.io/groups": []any{"noc"},
+				"acme":           map[string]any{"io/groups": []any{"wrong"}},
+			},
+			want: []string{"noc"},
+		},
+		{
+			name:   "claim absent",
+			claim:  "groups",
+			claims: map[string]any{"sub": "u-1"},
+			want:   nil,
+		},
+		{
+			name:   "path into something that is not an object",
+			claim:  "sub.groups",
+			claims: map[string]any{"sub": "u-1"},
+			want:   nil,
+		},
+		{
+			name:   "numbers and nulls in the array are skipped",
+			claim:  "groups",
+			claims: map[string]any{"groups": []any{"noc", 42, nil}},
+			want:   []string{"noc"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := claimValues(tc.claims, tc.claim)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// The refusal has to say which claim it read and what was in it. "You are in
+// none of the permitted groups" sends the operator to the wrong place when the
+// truth is that no groups arrived at all.
+func TestRefusalNamesTheClaimAndWhatItFound(t *testing.T) {
+	a := &Auth{cfg: Config{
+		AllowedGroups: []string{"noc"},
+		GroupsClaim:   "urn:zitadel:iam:org:project:roles",
+	}}
+
+	err := a.authorize(User{Subject: "u-1"})
+	if err == nil {
+		t.Fatal("want a refusal")
+	}
+	for _, want := range []string{"u-1", "no groups at all", "urn:zitadel:iam:org:project:roles", "noc"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q: %v", want, err)
+		}
+	}
+
+	// And when groups did arrive, it says which — the difference between a
+	// misconfigured claim and a genuine "not your team".
+	err = a.authorize(User{Subject: "u-1", Email: "op@example.com", Groups: []string{"billing"}})
+	if !strings.Contains(err.Error(), "billing") || !strings.Contains(err.Error(), "op@example.com") {
+		t.Errorf("error does not report what was found: %v", err)
+	}
+}

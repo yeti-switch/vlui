@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -232,7 +233,19 @@ func (a *Auth) userFrom(t *oidc.IDToken) (User, error) {
 	if u.Name == "" {
 		u.Name = u.Email
 	}
-	u.Groups = strSlice(claims[a.cfg.GroupsClaim])
+	u.Groups = claimValues(claims, a.cfg.GroupsClaim)
+
+	// Which claims arrived, and what came out of the configured one. This is
+	// the log line that answers "why am I in none of the permitted groups"
+	// without a rebuild — the shape and the name of the group claim differ per
+	// provider, and the token is the only place that says which you have.
+	a.log.Debug("id_token claims",
+		"sub", t.Subject,
+		"claims", slices.Sorted(maps.Keys(claims)),
+		"groups_claim", a.cfg.GroupsClaim,
+		"groups", u.Groups,
+	)
+
 	return u, nil
 }
 
@@ -247,7 +260,19 @@ func (a *Auth) authorize(u User) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("account %q is in none of the permitted groups", u.Email)
+	// Names the claim it read and what it found there. The usual cause is not
+	// that the account is in the wrong group but that the groups never arrived:
+	// a provider that puts them somewhere else, or a token that carries none.
+	who := u.Email
+	if who == "" {
+		who = u.Subject
+	}
+	found := "no groups at all"
+	if len(u.Groups) > 0 {
+		found = fmt.Sprintf("groups %v", u.Groups)
+	}
+	return fmt.Errorf("account %q has %s from claim %q, and none of them are in allowed_groups %v",
+		who, found, a.cfg.GroupsClaim, a.cfg.AllowedGroups)
 }
 
 // logout always drops our session. Whether it also ends the IdP session is a
@@ -396,18 +421,70 @@ func str(v any) string {
 	return s
 }
 
-func strSlice(v any) []string {
-	raw, ok := v.([]any)
-	if !ok {
+// claimValues reads group or role names out of an id_token claim named by
+// auth.groups_claim.
+//
+// Two things vary between providers, and both have to be configuration rather
+// than assumptions, or vlui only works with the provider it was written
+// against:
+//
+//   - WHERE the names live. A flat "groups" for most; Zitadel puts roles under
+//     "urn:zitadel:iam:org:project:roles"; Keycloak nests client roles at
+//     "resource_access.<client>.roles". A dotted path walks nested objects, and
+//     an exact key is tried FIRST so a claim whose own name contains a dot
+//     still resolves.
+//
+//   - WHAT SHAPE they are in. An array of strings for most; Zitadel uses an
+//     OBJECT whose KEYS are the role names and whose values describe which
+//     organisation granted them; a lone string for a provider with one group.
+//     Reading only arrays is what made a Zitadel token look like an account in
+//     no groups at all.
+func claimValues(claims map[string]any, path string) []string {
+	if path == "" {
 		return nil
 	}
-	out := make([]string, 0, len(raw))
-	for _, x := range raw {
-		if s, ok := x.(string); ok {
-			out = append(out, s)
+	if v, ok := claims[path]; ok {
+		return asStrings(v)
+	}
+
+	var cur any = claims
+	for _, part := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		if cur, ok = m[part]; !ok {
+			return nil
 		}
 	}
-	return out
+	return asStrings(cur)
+}
+
+func asStrings(v any) []string {
+	switch t := v.(type) {
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, x := range t {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+
+	case map[string]any:
+		// Zitadel's shape: the keys are the role names. Sorted, so a log line
+		// and an error message read the same way twice running.
+		return slices.Sorted(maps.Keys(t))
+
+	case string:
+		// One group, not a list to be split: a name may legitimately contain a
+		// space or a comma, and guessing a separator would corrupt it.
+		if t == "" {
+			return nil
+		}
+		return []string{t}
+	}
+	return nil
 }
 
 // fail writes an error response. As in the api package, a 5xx withholds its

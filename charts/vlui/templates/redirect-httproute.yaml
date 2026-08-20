@@ -1,0 +1,53 @@
+{{- if .Values.httpRoute.redirParentRefs }}
+
+{{- if not .Values.httpRoute.enabled }}
+{{- fail "httpRoute.redirParentRefs is set but httpRoute.enabled is false — a redirect to https with nothing serving https is a loop. Enable the main route as well." }}
+{{- end }}
+
+{{/*
+A route with no backendRefs at all: Gateway API requires exactly that for a
+RequestRedirect, and it is why this cannot be a second rule on the main route.
+
+redirParentRefs is the switch as well as the setting. The plaintext listener is
+the one thing here that can have no sensible default — inheriting the main
+route's parentRefs would attach the redirect to the https listener and loop —
+so its absence is the clearest possible way to say "no redirect route", and
+there is no `enabled` flag to set inconsistently with it.
+
+It matches "/" rather than base_path on purpose. Redirecting only the sub-path
+would leave every other http request on that hostname unhandled, which is not
+what anyone means by "redirect to https".
+*/}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "vlui.fullname" . }}-redirect
+  labels:
+    {{- include "vlui.labels" . | nindent 4 }}
+    {{- with .Values.httpRoute.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.httpRoute.redirParentRefs | nindent 4 }}
+  {{- with (default .Values.httpRoute.hostnames .Values.httpRoute.redirHostnames) }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            # 301 is cached by the browser, sometimes long past the point where
+            # anyone remembers why a hostname will not serve plaintext any
+            # more. 302 and 308 say it without that; hence the knob.
+            statusCode: {{ .Values.httpRoute.redirStatusCode }}
+            {{- with .Values.httpRoute.redirPort }}
+            port: {{ . }}
+            {{- end }}
+{{- end }}

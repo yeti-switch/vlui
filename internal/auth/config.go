@@ -78,7 +78,20 @@ type Config struct {
 	// GroupsClaim. Authorisation, as opposed to authentication: without it,
 	// anyone the IdP knows can read every log line this tenant holds.
 	AllowedGroups []string `yaml:"allowed_groups"`
-	GroupsClaim   string   `yaml:"groups_claim"`
+
+	// GroupsClaim names the claim the group or role names are read from. It
+	// defaults to "groups", which is what most providers emit, and it takes a
+	// dotted path for the ones that nest:
+	//
+	//   groups                              most providers
+	//   urn:zitadel:iam:org:project:roles   Zitadel
+	//   resource_access.vlui.roles          Keycloak client roles
+	//   roles                               Auth0, Entra (with a mapper)
+	//
+	// The SHAPE is not configured, because it does not have to be: an array of
+	// strings, an object whose keys are the names (Zitadel), or a lone string
+	// are all read the same way. See claimValues.
+	GroupsClaim string `yaml:"groups_claim"`
 }
 
 // Validate reports whether this configuration could start, without contacting

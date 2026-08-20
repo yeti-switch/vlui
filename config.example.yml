@@ -96,6 +96,25 @@ auth:
   # knows can read every log line this tenant holds. Requires the id_token to
   # carry one of these in groups_claim.
   # allowed_groups: [noc, sre]
+  #
+  # groups_claim names the claim to read them from. "groups" suits most
+  # providers; a dotted path walks nested objects for the ones that do not:
+  #
+  #   groups_claim: groups                              most providers
+  #   groups_claim: urn:zitadel:iam:org:project:roles   Zitadel
+  #   groups_claim: resource_access.vlui.roles          Keycloak client roles
+  #
+  # The shape does not need configuring: an array of strings, an object whose
+  # keys are the names (which is what Zitadel sends), or a single string all
+  # work.
+  #
+  # ZITADEL also needs the roles put INTO the token, which is off by default —
+  # enable "Assert Roles on Authentication" on the project, or request the
+  # urn:zitadel:iam:org:projects:roles scope. Without that the claim is absent
+  # and every login is refused for being in no groups.
+  #
+  # Not sure what your provider sends? Run with -debug and sign in: the claim
+  # names in the token, and what was read from the configured one, are logged.
   # groups_claim: groups
 
   # What "Sign out" means:

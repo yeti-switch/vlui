@@ -66,6 +66,14 @@ httpRoute:
   # timeout that would cut it.
   timeouts:
     request: 1h
+  # Optional: naming the plaintext listener here emits a SECOND route that
+  # 301s to https. Its own object, because Gateway API forbids a
+  # RequestRedirect on a rule that has a backend. Leave it out if your Gateway
+  # redirects at the listener.
+  redirParentRefs:
+    - name: external
+      namespace: gateway-system
+      sectionName: http
 
 podMonitor:
   enabled: true

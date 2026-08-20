@@ -186,6 +186,13 @@ jobs:
             --set 'httpRoute.parentRefs[0].name=external' \
             --set 'httpRoute.hostnames[0]=logs.example.com' \
             --set podDisruptionBudget.enabled=true > /dev/null
+          # The redirect route, which is a second HTTPRoute on the plaintext
+          # listener.
+          helm template t charts/vlui \
+            --set httpRoute.enabled=true \
+            --set 'httpRoute.parentRefs[0].name=external' \
+            --set 'httpRoute.redirParentRefs[0].name=external' \
+            --set 'httpRoute.redirParentRefs[0].sectionName=http' > /dev/null
 
       # The guards must actually fire. A validation that stopped working would
       # otherwise be invisible until it let a broken release through.
@@ -200,6 +207,14 @@ jobs:
           fails --set httpRoute.enabled=true
           # Nothing to scrape.
           fails --set podMonitor.enabled=true --set config.metrics.listen=""
+          # A rule cannot both redirect and have a backend; Gateway API rejects
+          # it, so the chart should too rather than deferring to the API server.
+          fails --set httpRoute.enabled=true \
+                --set 'httpRoute.parentRefs[0].name=g' \
+                --set 'httpRoute.filters[0].type=RequestRedirect' \
+                --set 'httpRoute.filters[0].requestRedirect.scheme=https'
+          # A redirect with nothing serving https to redirect TO.
+          fails --set 'httpRoute.redirParentRefs[0].name=g'
           # Authentication that cannot work.
           fails --set config.auth.enabled=true
           fails --set config.auth.enabled=true \
