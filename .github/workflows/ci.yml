@@ -215,6 +215,12 @@ jobs:
                 --set 'httpRoute.filters[0].requestRedirect.scheme=https'
           # A redirect with nothing serving https to redirect TO.
           fails --set 'httpRoute.redirParentRefs[0].name=g'
+          # A generated cookie_secret across replicas: each pod signs with a
+          # different one, so sessions fail at random.
+          fails --set config.auth.enabled=true \
+                --set config.auth.issuer=https://idp \
+                --set config.auth.redirect_url=https://x/api/auth/callback \
+                --set replicaCount=2
           # Authentication that cannot work.
           fails --set config.auth.enabled=true
           fails --set config.auth.enabled=true \

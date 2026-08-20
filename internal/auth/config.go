@@ -43,6 +43,19 @@ type Config struct {
 
 	// CookieSecret signs the session cookie. At least 32 bytes. Rotating it
 	// logs everyone out, which is also how you revoke every session at once.
+	//
+	// Empty generates a random one at startup, which is convenient for a trial
+	// and wrong for a deployment, in two ways worth spelling out:
+	//
+	//   - Every restart signs everyone out. A rolling update, a crash, a config
+	//     reload: each one invalidates every session.
+	//
+	//   - More than one instance means more than one secret. A session created
+	//     against one is refused by the others, so behind a load balancer
+	//     people are signed out at random, on some requests and not others,
+	//     which reads as a broken application rather than a missing setting.
+	//
+	// New logs a warning when it generates one.
 	CookieSecret string `yaml:"cookie_secret"`
 	CookieName   string `yaml:"cookie_name"`
 
@@ -138,9 +151,11 @@ func (c *Config) validate() error {
 	if c.RedirectURL == "" {
 		return fmt.Errorf("auth: redirect_url is required and must match what the provider has registered")
 	}
-	// A short secret is worse than none, because it looks like security.
-	if len(c.CookieSecret) < 32 {
-		return fmt.Errorf("auth: cookie_secret must be at least 32 bytes (got %d)", len(c.CookieSecret))
+	// Empty is allowed: New generates one. A SHORT one is not — that is worse
+	// than none, because it looks like security while being guessable, and
+	// unlike an empty value it is clearly something somebody meant.
+	if c.CookieSecret != "" && len(c.CookieSecret) < 32 {
+		return fmt.Errorf("auth: cookie_secret must be at least 32 bytes (got %d); leave it empty to have one generated", len(c.CookieSecret))
 	}
 	if c.Logout != LogoutLocal && c.Logout != LogoutProvider {
 		return fmt.Errorf("auth: logout must be %q or %q, got %q",

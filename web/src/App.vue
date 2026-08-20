@@ -8,7 +8,9 @@ import HitsChart from './components/HitsChart.vue'
 import QueryBar from './components/QueryBar.vue'
 import ResultsTable from './components/ResultsTable.vue'
 import RowDetail from './components/RowDetail.vue'
+import LoginGate from './components/LoginGate.vue'
 import SideRail from './components/SideRail.vue'
+import { markSignedOut, signedOut } from './session'
 
 const cfg = ref<AppConfig | null>(null)
 const bootError = ref('')
@@ -388,21 +390,47 @@ function readHash(): boolean {
 /* --- session -------------------------------------------------------------- */
 
 async function signOut() {
+  // Stop everything first: a live tail or a running query would otherwise keep
+  // streaming against a session that is about to end, and its 401 would arrive
+  // after the gate is already up.
+  cancel()
+  stopTail()
+
   try {
     const res = await fetch(new URL('api/auth/logout', document.baseURI), {
       method: 'POST',
       credentials: 'same-origin',
     })
     const body = await res.json().catch(() => ({}))
+
+    // Only with logout: provider. The IdP ends its own session and sends the
+    // browser back, which then arrives here signed out.
     if (typeof body?.provider_logout_url === 'string') {
       window.location.assign(body.provider_logout_url)
       return
     }
   } catch {
-    // Even a failed call has dropped the cookie in every case that matters;
-    // reloading is what makes the UI agree.
+    // The cookie is dropped by the response we did not get to read, or it was
+    // never valid. Either way there is no session left to use.
   }
-  window.location.reload()
+
+  // The gate, not a reload. Reloading would ask the server who we are, get a
+  // 401, and — before this changed — bounce to a provider that still has a
+  // session, signing the browser straight back in.
+  clearSession()
+  markSignedOut()
+}
+
+// Everything on screen belonged to the session that just ended.
+function clearSession() {
+  rows.value = []
+  selectedIndex.value = -1
+  hits.value = null
+  facets.value = []
+  shownRange.value = null
+  error.value = ''
+  elapsedMs.value = 0
+  if (cfg.value) cfg.value = { ...cfg.value, user: null }
 }
 
 function message(e: unknown): string {
@@ -424,8 +452,8 @@ onMounted(async () => {
     // which for a filtered tool would ask for everything twice over.
     query.value = defaultQueryFor(toolById(activeTool.value))
   } catch (e) {
-    // A 401 has already navigated to the IdP; anything else means the app
-    // cannot start, and saying so beats an empty screen.
+    // A 401 has raised the gate; anything else means the app cannot start, and
+    // saying so beats an empty screen.
     if (!(e instanceof ApiError && e.status === 401)) bootError.value = message(e)
     return
   }
@@ -443,7 +471,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app">
+  <LoginGate v-if="signedOut" />
+
+  <div v-else class="app">
     <SideRail
       :version="cfg?.version ?? ''"
       :commit="cfg?.commit ?? ''"

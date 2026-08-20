@@ -43,6 +43,16 @@ func New(ctx context.Context, cfg Config, base string, log *slog.Logger) (*Auth,
 		return nil, err
 	}
 
+	// A generated secret is a working session cookie and a broken deployment,
+	// so it says so once, loudly, rather than being discovered when people
+	// start reporting random logouts.
+	if cfg.CookieSecret == "" {
+		cfg.CookieSecret = randString()
+		log.Warn("auth: cookie_secret is not set, so a random one was generated for this process",
+			"consequence", "every restart signs everyone out, and a second instance will reject this one's sessions",
+			"fix", "set auth.cookie_secret to a value of at least 32 bytes: openssl rand -hex 32")
+	}
+
 	a := &Auth{cfg: cfg, base: base, log: log}
 
 	var endpoint oauth2.Endpoint
@@ -111,7 +121,7 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 		State:    randString(),
 		Nonce:    randString(),
 		Verifier: oauth2.GenerateVerifier(),
-		Return:   safeReturn(r.URL.Query().Get("return_to")),
+		Return:   a.safeReturn(r.URL.Query().Get("return_to")),
 	}
 
 	// The flow lives in a signed cookie rather than in server memory, so the
@@ -401,9 +411,23 @@ func (a *Auth) decodeFlow(token string) (flow, error) {
 // safeReturn keeps the post-login redirect inside this app. An open redirect
 // here would let a crafted login link bounce the user to an attacker's page
 // wearing our domain.
-func safeReturn(p string) string {
+//
+// The path it returns is relative to base_path, which the caller prepends. A
+// return_to that ALREADY carries the base — an older client, or somebody
+// building the URL by hand from what the address bar showed — would otherwise
+// come back to /logs/logs/, so the duplicate prefix is stripped here rather
+// than being anyone else's problem.
+func (a *Auth) safeReturn(p string) string {
 	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
 		return "/"
+	}
+	if a.base != "" {
+		if p == a.base {
+			return "/"
+		}
+		if after, found := strings.CutPrefix(p, a.base+"/"); found {
+			return "/" + after
+		}
 	}
 	return p
 }

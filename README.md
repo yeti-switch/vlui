@@ -53,9 +53,12 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
   instants, so changing it re-renders rather than re-queries), light/dark/system
   theme, the build version, and the signed-in user with Sign out. Both
   preferences are remembered per browser.
-- **OIDC login** — any conformant provider; optionally restricted to a group,
-  read from a configurable claim (`groups`, a Zitadel role URN, a nested
-  Keycloak path) in whatever shape that provider sends.
+- **OIDC login** — a login page with one button, then any conformant provider;
+  optionally restricted to a group, read from a configurable claim (`groups`, a
+  Zitadel role URN, a nested Keycloak path) in whatever shape that provider
+  sends. Signing out drops the cookie and returns you to that page rather than
+  bouncing back through an IdP that still has a session — as does a session that
+  expires while you are using it, live tail included.
 - **Prometheus exporter**, built in, on its own port — optional, and off until
   you name a listen address.
 
@@ -100,12 +103,18 @@ auth:
   client_id: vlui
   client_secret: "…"
   redirect_url: https://logs.example.com/api/auth/callback
-  cookie_secret: "…"        # openssl rand -hex 32
+  cookie_secret: "…"        # openssl rand -hex 32; empty generates one, see below
   allowed_groups: [noc]     # authorisation, not just authentication
 ```
 
 The session is a signed cookie carrying the user, which is what lets this
 application have no database. Rotating `cookie_secret` revokes every session.
+
+Leaving `cookie_secret` empty generates one at startup, which is fine for a
+trial and wrong for a deployment: every restart signs everyone out, and two
+instances generate two secrets, so behind a load balancer people are signed out
+on some requests and not others. The process warns when it generates one, and
+the Helm chart refuses to render an empty secret above one replica.
 
 `allowed_groups` reads from `groups_claim`, which defaults to `groups` and takes
 a dotted path for providers that nest — `urn:zitadel:iam:org:project:roles` for

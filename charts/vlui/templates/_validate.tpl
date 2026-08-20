@@ -31,11 +31,25 @@ quietly wrong.
     {{- end -}}
   {{- end -}}
 
-  {{- if not $auth.cookie_secret -}}
-    {{- fail "config.auth.enabled is true but config.auth.cookie_secret is empty — generate one with `openssl rand -hex 32`" -}}
+  {{/*
+  An empty cookie_secret is allowed — vlui generates one at startup — but only
+  for a single pod. Each replica generates its OWN, so a session created against
+  one is refused by the others: behind a Service, people are signed out at
+  random, on some requests and not others. That reads as a broken application
+  rather than a missing setting, which is exactly why it fails here instead.
+
+  A rolling update has the same effect even at one replica, and that one is
+  survivable (everybody signs in again), so it is a warning in the pod's log
+  rather than a refusal here.
+  */}}
+  {{- if and (not $auth.cookie_secret) (gt (int .Values.replicaCount) 1) -}}
+    {{- fail (printf "%s\n\n%s\n\n%s"
+      (printf "config.auth.cookie_secret is empty and replicaCount is %d." (int .Values.replicaCount))
+      "vlui generates a random secret when none is set, and each replica generates a different one — a session signed by one pod is refused by every other, so users are signed out on roughly (n-1)/n of their requests."
+      "Set config.auth.cookie_secret (openssl rand -hex 32), or run a single replica.") -}}
   {{- end -}}
-  {{- if lt (len (toString $auth.cookie_secret)) 32 -}}
-    {{- fail (printf "config.auth.cookie_secret is %d bytes; vlui requires at least 32" (len (toString $auth.cookie_secret))) -}}
+  {{- if and $auth.cookie_secret (lt (len (toString $auth.cookie_secret)) 32) -}}
+    {{- fail (printf "config.auth.cookie_secret is %d bytes; vlui requires at least 32, or leave it empty to have one generated" (len (toString $auth.cookie_secret))) -}}
   {{- end -}}
   {{- if not $auth.issuer -}}
     {{- fail "config.auth.enabled is true but config.auth.issuer is empty" -}}

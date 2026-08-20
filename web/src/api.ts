@@ -1,3 +1,4 @@
+import { markSignedOut, probe } from './session'
 import type {
   AppConfig,
   FacetsResponse,
@@ -45,8 +46,10 @@ function rangeParams(range: TimeRange): Record<string, string> {
   return { start: String(range.startMs), end: String(range.endMs) }
 }
 
-// A 401 is not an error to show; it is a login that has to happen. The server
-// hands back where to go, since only it knows the mount point.
+// A 401 is not an error to show; it is a login that has to happen. It raises
+// the login gate rather than navigating to the provider on the spot: an
+// automatic bounce means Sign out lands on an IdP that still has a session,
+// which signs the browser straight back in and looks like the button is broken.
 async function check(res: Response): Promise<Response> {
   if (res.ok) return res
 
@@ -60,11 +63,9 @@ async function check(res: Response): Promise<Response> {
     // A proxy in front of us may answer with HTML; the status is all we get.
   }
 
-  if (res.status === 401 && loginURL) {
-    const back = window.location.pathname + window.location.search + window.location.hash
-    window.location.assign(`${loginURL}?return_to=${encodeURIComponent(back)}`)
-    // The navigation is asynchronous; nothing after this should render.
-    throw new ApiError('signing in…', 401)
+  if (res.status === 401) {
+    markSignedOut(loginURL)
+    throw new ApiError(message, 401)
   }
 
   throw new ApiError(message, res.status)
@@ -208,8 +209,24 @@ export function openTail(query: string, tool: string, handlers: TailHandlers): E
         return
       }
     }
-    // No payload means the transport dropped. EventSource is already retrying,
-    // so this is a status, not a failure.
+
+    // No payload. Which of the two things this is depends on readyState:
+    //
+    //   CONNECTING — the transport dropped and the browser is already
+    //                reconnecting. A status, not a failure.
+    //
+    //   CLOSED     — the browser gave up, and the only way it does that is a
+    //                response it will not retry: an HTTP error status. The
+    //                commonest by far is a 401 from an expired session. Left
+    //                unhandled the pane keeps saying "following" over a stream
+    //                that will never deliver another line, which is the worst
+    //                of the available outcomes — it looks alive.
+    if (es.readyState === EventSource.CLOSED) {
+      handlers.onError('the live tail was closed by the server')
+      // Asked, rather than assumed: a 401 raises the login gate, and anything
+      // else leaves the message above as the explanation.
+      void probe()
+    }
   })
 
   return es

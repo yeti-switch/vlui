@@ -376,11 +376,11 @@ func TestReturnToCannotLeaveTheApp(t *testing.T) {
 		"javascript:alert(1)",
 		"",
 	} {
-		if got := safeReturn(evil); got != "/" {
+		if got := (&Auth{}).safeReturn(evil); got != "/" {
 			t.Errorf("safeReturn(%q) = %q; must not leave the app", evil, got)
 		}
 	}
-	if got := safeReturn("/traffic/vendor-traffic"); got != "/traffic/vendor-traffic" {
+	if got := (&Auth{}).safeReturn("/traffic/vendor-traffic"); got != "/traffic/vendor-traffic" {
 		t.Errorf("an in-app path should survive, got %q", got)
 	}
 }
@@ -419,7 +419,7 @@ func TestPostLoginRedirectStaysUnderTheMount(t *testing.T) {
 	for _, base := range []string{"", "/stats", "/yeti/reports"} {
 		a := testAuth(t, base)
 		// This is the concatenation the callback performs.
-		if got := a.base + safeReturn("/traffic/vendor-traffic"); got != base+"/traffic/vendor-traffic" {
+		if got := a.base + a.safeReturn("/traffic/vendor-traffic"); got != base+"/traffic/vendor-traffic" {
 			t.Errorf("base %q: redirect = %q", base, got)
 		}
 	}
@@ -610,5 +610,133 @@ func TestRefusalNamesTheClaimAndWhatItFound(t *testing.T) {
 	err = a.authorize(User{Subject: "u-1", Email: "op@example.com", Groups: []string{"billing"}})
 	if !strings.Contains(err.Error(), "billing") || !strings.Contains(err.Error(), "op@example.com") {
 		t.Errorf("error does not report what was found: %v", err)
+	}
+}
+
+// The base path is prepended by the caller, so a return_to that already carries
+// it must not be prefixed twice — signing in at /logs/ would otherwise land on
+// /logs/logs/, which serves the SPA's history fallback and looks like the app
+// forgot where it was.
+func TestSafeReturnDoesNotDoubleTheBasePath(t *testing.T) {
+	a := &Auth{base: "/logs"}
+
+	cases := map[string]string{
+		"/logs/":          "/",
+		"/logs":           "/",
+		"/logs/#q=error":  "/#q=error",
+		"/logs/deep/link": "/deep/link",
+		"/":               "/",
+		"/#q=error":       "/#q=error",
+		// Not ours to strip: a path that merely starts with the same letters.
+		"/logsomething": "/logsomething",
+	}
+	for in, want := range cases {
+		if got := a.safeReturn(in); got != want {
+			t.Errorf("safeReturn(%q) = %q, want %q", in, got, want)
+		}
+		// What the caller actually redirects to. Compared against the expected
+		// landing rather than sniffed for a "/logs/logs" prefix: that heuristic
+		// flags "/logsomething" -> "/logs/logsomething", which is correct.
+		if landing, want := a.base+a.safeReturn(in), a.base+want; landing != want {
+			t.Errorf("return_to %q lands on %q, want %q", in, landing, want)
+		}
+	}
+
+	// With no base path there is nothing to strip.
+	plain := &Auth{}
+	if got := plain.safeReturn("/logs/"); got != "/logs/" {
+		t.Errorf("with no base, safeReturn(%q) = %q", "/logs/", got)
+	}
+}
+
+// fakeProvider is just enough OIDC to get through New: go-oidc fetches the
+// discovery document and nothing else until a token is verified, and the
+// issuer in it must match the URL it was fetched from.
+func fakeProvider(t *testing.T) string {
+	t.Helper()
+
+	var issuer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                issuer,
+			"authorization_endpoint":                issuer + "/authorize",
+			"token_endpoint":                        issuer + "/token",
+			"jwks_uri":                              issuer + "/jwks",
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	}))
+	issuer = srv.URL
+	t.Cleanup(srv.Close)
+	return issuer
+}
+
+// An empty cookie_secret is a trial convenience, not a configuration error: the
+// process generates one so `auth.enabled: true` works with nothing else set.
+func TestGeneratedCookieSecret(t *testing.T) {
+	idp := fakeProvider(t)
+
+	cfg := Config{
+		Enabled:     true,
+		Issuer:      idp,
+		ClientID:    "vlui",
+		RedirectURL: "https://logs.example/api/auth/callback",
+		// No CookieSecret.
+	}
+
+	// It must pass the config check, or -check-config would refuse a
+	// configuration that starts perfectly well.
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an empty cookie_secret must be allowed: %v", err)
+	}
+
+	a, err := New(t.Context(), cfg, "", slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// And the generated one must actually work: a session it signs verifies.
+	tok, err := a.encode(session{User: User{Subject: "u-1"}, Expires: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.decode(tok); err != nil {
+		t.Fatalf("a session signed with the generated secret does not verify: %v", err)
+	}
+
+	// The caveat, as a test rather than only as a warning in the log: two
+	// processes generate two secrets, so one's cookies are refused by the
+	// other. This is why it must not be relied on with replicas or across a
+	// restart.
+	b, err := New(t.Context(), cfg, "", slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.decode(tok); err == nil {
+		t.Error("a second process accepted the first one's session — the secrets are supposed to differ")
+	}
+}
+
+// Short is still refused. Unlike empty, it is clearly something somebody meant,
+// and it looks like security while being guessable.
+func TestShortCookieSecretIsStillRefused(t *testing.T) {
+	cfg := Config{
+		Enabled:      true,
+		Issuer:       "https://idp.example",
+		ClientID:     "vlui",
+		RedirectURL:  "https://logs.example/api/auth/callback",
+		CookieSecret: "too short",
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	// And it should point at the alternative rather than only complaining.
+	if !strings.Contains(err.Error(), "leave it empty") {
+		t.Errorf("error does not mention the generated option: %v", err)
 	}
 }

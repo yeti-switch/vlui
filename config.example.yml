@@ -87,6 +87,17 @@ auth:
 
   # Signs the session cookie. At least 32 bytes: `openssl rand -hex 32`.
   # Rotating it logs everyone out, which is also how you revoke every session.
+  #
+  # Leave it EMPTY and one is generated at startup. That is fine for a trial and
+  # wrong for a deployment, in two ways:
+  #
+  #   - every restart signs everyone out — a rolling update, a crash, a config
+  #     change;
+  #   - two instances generate two secrets, so behind a load balancer a session
+  #     made against one is refused by the other, and people are signed out on
+  #     some requests and not others.
+  #
+  # The process logs a warning when it generates one.
   cookie_secret: CHANGEME-32-BYTES-MINIMUM-000000
 
   # scopes: [openid, profile, email]
