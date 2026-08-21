@@ -1,0 +1,97 @@
+# Alerting rules for vlui.
+#
+# Same shape as the other yeti services' rules (vrrp.yml, ruby.yml in the
+# ansible repo's victoria-metrics role): groups, severity labels, and a `msg`
+# annotation. Drop this file in beside them —
+# roles/infrastructure/victoria-metrics/templates/vlui.yml.j2 — and add "vlui.yml"
+# to the with_items list in install-vmalert.yml. It carries no Jinja, so it can
+# be copied verbatim.
+#
+# In Kubernetes the Helm chart ships these same rules as a PrometheusRule:
+# prometheusRule.enabled=true.
+#
+# Severities follow the house scale: critical pages, major is looked at today,
+# minor is looked at eventually. Nothing here is critical — vlui is how you read
+# logs, not how calls get routed. If it is down at 3am, the logs are still being
+# collected and can be read when somebody is awake.
+
+groups:
+  - name: vlui
+    rules:
+      # The exporter has stopped being scraped: the process is gone, the pod is
+      # not up, or the scrape config no longer matches it. Whatever the cause,
+      # every other rule here has gone blind, so this one has to fire first.
+      - alert: VluiDown
+        expr: absent(vlui_build_info)
+        for: 5m
+        labels:
+          severity: major
+        annotations:
+          msg: "vlui is not being scraped — the process is down or the scrape target is wrong"
+
+      # vlui cannot reach VictoriaLogs. Kept fresh by vlui's own background
+      # probe, so it is true of an idle instance as well as a busy one; the
+      # series only exists when metrics.probe_interval is set.
+      - alert: VluiVictoriaLogsDown
+        expr: vlui_vl_up == 0
+        for: 5m
+        labels:
+          severity: major
+        annotations:
+          msg: "vlui cannot reach VictoriaLogs — every query, histogram and live tail is failing"
+
+      # Requests to VictoriaLogs that FAILED, as opposed to requests that were
+      # refused.
+      #
+      # The status filter is the whole point of this rule. A 4xx is almost
+      # always a LogsQL syntax error — somebody mistyped a query, VictoriaLogs
+      # said so, and the UI showed them. Alerting on that pages a human for a
+      # typo. `error` is a transport failure and 5xx is VictoriaLogs itself
+      # being unwell; those are worth waking up for.
+      - alert: VluiVictoriaLogsErrors
+        expr: rate(vlui_vl_requests_total{status=~"error|5.."}[5m]) > 0
+        for: 10m
+        labels:
+          severity: major
+        annotations:
+          msg: "VictoriaLogs failing on {{$labels.endpoint}} (status {{$labels.status}}) for 10 minutes"
+
+      # vlui's own 500s. Its upstream problems are reported as 502 and covered
+      # by the rule above, so a 500 here is a fault in vlui rather than in
+      # anything it talks to.
+      - alert: VluiInternalErrors
+        expr: rate(vlui_http_requests_total{status="500"}[5m]) > 0
+        for: 10m
+        labels:
+          severity: minor
+        annotations:
+          msg: "vlui returning 500 on {{$labels.route}} — this is a bug rather than an outage"
+
+      # Queries that never finish. A query is seconds; the row cap and the time
+      # range bound it. Several sitting open for a quarter of an hour means
+      # something is not completing — a wedged upstream, or a client that
+      # neither reads nor closes.
+      #
+      # Live tails are deliberately not counted here: they are meant to stay
+      # open. See vlui_tail_sessions_active for those.
+      - alert: VluiQueriesStuck
+        expr: vlui_queries_active > 5
+        for: 15m
+        labels:
+          severity: minor
+        annotations:
+          msg: "{{$value}} vlui queries have been in flight for 15 minutes"
+
+      # VictoriaLogs answering slowly enough that the UI feels broken. Measured
+      # to the first response byte, so this is time-to-first-row rather than
+      # the length of a big download.
+      - alert: VluiSlowQueries
+        expr: |
+          histogram_quantile(0.9,
+            sum by (le) (rate(vlui_vl_request_duration_seconds_bucket{endpoint="/select/logsql/query"}[15m]))
+          ) > 30
+        for: 15m
+        labels:
+          severity: minor
+        annotations:
+          msg: "90th percentile time to first log line is {{$value | humanizeDuration}}"

@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -28,6 +30,11 @@ type Config struct {
 	// Applied at runtime rather than baked into the build, so one binary works
 	// at either.
 	BasePath string `yaml:"base_path"`
+
+	// UI is what the browser shows before it shows any logs: the tab's title
+	// and its icon. Deployment identity — which of three vlui instances this
+	// tab is — rather than anything functional.
+	UI UI `yaml:"ui"`
 
 	VictoriaLogs VictoriaLogs `yaml:"victorialogs"`
 	Auth         auth.Config  `yaml:"auth"`
@@ -51,10 +58,16 @@ type Config struct {
 // contain a pipe — `error | stats count()` prepended to a user's query would
 // put a pipe in the middle and change what every following stage operates on.
 type Tool struct {
-	// ID is derived from the tooltip, not configured. It is what the URL
-	// carries, so a link to what you are looking at survives a reordering of
-	// this list.
-	ID string `yaml:"-"`
+	// ID names the tool. Required, and unique within the list.
+	//
+	// It is what the URL carries and what every request sends, so it is the one
+	// part of a tool that must not change casually: a link to what somebody is
+	// looking at is a link to this string. Deriving it from the tooltip — as an
+	// earlier version did — meant renaming a tool silently broke every link to
+	// it, and two tools whose names differed only in punctuation collided.
+	//
+	// Letters, digits, dashes and underscores.
+	ID string `yaml:"id"`
 
 	// Tooltip is the label shown on hover. Required: an icon-only rail with an
 	// unlabelled icon is a guessing game.
@@ -62,7 +75,17 @@ type Tool struct {
 
 	// Icon names one of the shapes the UI ships. Unknown names are refused at
 	// startup rather than rendering as a blank square.
+	//
+	// Exactly one of icon or letters.
 	Icon string `yaml:"icon"`
+
+	// Letters is a short label drawn in place of an icon — "API", "SIP", "DB".
+	//
+	// It exists because a rail of a dozen tools runs out of shapes that mean
+	// anything: the fourth abstract glyph is one nobody can tell from the
+	// fifth, while three letters of the system's own name need no legend. Up to
+	// three characters, which is what fits at a readable size.
+	Letters string `yaml:"letters"`
 
 	// Query is optional. A tool without one — "everything", usually first in
 	// the list — selects nothing and filters nothing.
@@ -71,6 +94,14 @@ type Tool struct {
 	// browser: the API is reachable with curl by anyone holding a session, so a
 	// filter the client composes is a suggestion rather than a restriction.
 	Query string `yaml:"query"`
+
+	// Fields are the columns the results table opens with for this tool. They
+	// vary per slice of the logs: a SIP tool wants call_id and host, a billing
+	// one wants neither. Empty falls back to _time and _msg.
+	//
+	// A default, not a restriction — whatever the operator selects afterwards is
+	// remembered in their browser and wins.
+	Fields []string `yaml:"fields"`
 
 	// AllowedGroups, when set, hides this tool from anyone whose id_token does
 	// not carry one of these in auth.groups_claim, and refuses its filter to
@@ -85,6 +116,25 @@ type Tool struct {
 	// match and a tool carrying this is refused at startup rather than silently
 	// admitting everyone.
 	AllowedGroups []string `yaml:"allowed_groups"`
+}
+
+type UI struct {
+	// Title is the browser tab's title. Empty keeps the default.
+	//
+	// It is written into index.html when the server starts rather than set by
+	// the SPA, so the tab is right from the first byte — before the JavaScript
+	// runs, and on the login page, which is served to people who have no
+	// session and therefore cannot read the config API.
+	Title string `yaml:"title"`
+
+	// Favicon is a path to an image on disk — svg, png, ico, jpeg, gif or webp.
+	// Empty keeps the one that ships with the SPA.
+	//
+	// A local file rather than a URL: the page's Content-Security-Policy allows
+	// images from this origin only, so an icon hosted elsewhere would be
+	// blocked by the browser and the tab would silently keep the default. The
+	// file is read once at startup and served from memory.
+	Favicon string `yaml:"favicon"`
 }
 
 type Preset struct {
@@ -163,6 +213,11 @@ type Metrics struct {
 	// rate(vlui_vl_requests_total{status="error"}[5m]) instead.
 	ProbeInterval time.Duration `yaml:"probe_interval"`
 }
+
+// maxToolLetters is what fits in the rail's 40px button at a size anyone can
+// read. Four characters means either an unreadable font or a clipped label, and
+// a clipped label is a worse legend than no label.
+const maxToolLetters = 3
 
 func Default() Config {
 	return Config{
@@ -263,6 +318,9 @@ func (c *Config) validate() error {
 		return fmt.Errorf("victorialogs.timeout must be positive")
 	}
 
+	c.UI.Title = strings.TrimSpace(c.UI.Title)
+	c.UI.Favicon = strings.TrimSpace(c.UI.Favicon)
+
 	for i, q := range c.Queries {
 		if q.Name == "" || q.Query == "" {
 			return fmt.Errorf("queries[%d]: both name and query must be set", i)
@@ -286,22 +344,58 @@ func (c *Config) validateTools() error {
 		t.Icon = strings.TrimSpace(t.Icon)
 		t.Query = strings.TrimSpace(t.Query)
 
+		t.ID = strings.TrimSpace(t.ID)
+		if t.ID == "" {
+			return fmt.Errorf("tools[%d] (%s): id must be set — it is what the URL carries and what each request sends", i, orUnnamed(t.Tooltip))
+		}
+		if bad := firstBadIDRune(t.ID); bad != 0 {
+			return fmt.Errorf("tools[%d]: id %q contains %q; use letters, digits, dashes and underscores", i, t.ID, bad)
+		}
+		if first, dup := seen[t.ID]; dup {
+			return fmt.Errorf("tools[%d] and tools[%d]: both use the id %q, which has to be unique — it is how a request names one tool rather than the other",
+				i, first, t.ID)
+		}
+		seen[t.ID] = i
+
+		// The tooltip defaults to the id: a tool called "api" needs no second
+		// name to hover over, and an unlabelled icon would be a guessing game.
 		if t.Tooltip == "" {
-			return fmt.Errorf("tools[%d]: tooltip must be set — it is the only label an icon has", i)
+			t.Tooltip = t.ID
 		}
-		if t.Icon == "" {
-			return fmt.Errorf("tools[%d] (%s): icon must be set; available: %s",
+		t.Letters = strings.TrimSpace(t.Letters)
+
+		switch {
+		case t.Icon == "" && t.Letters == "":
+			return fmt.Errorf("tools[%d] (%s): set either icon or letters; icons available: %s",
 				i, t.Tooltip, strings.Join(Icons, ", "))
-		}
-		if !slices.Contains(Icons, t.Icon) {
+		case t.Icon != "" && t.Letters != "":
+			// Both would leave the UI picking one, and whichever it picked would
+			// be the wrong one for somebody.
+			return fmt.Errorf("tools[%d] (%s): icon %q and letters %q are both set; a tool has one or the other",
+				i, t.Tooltip, t.Icon, t.Letters)
+		case t.Icon != "" && !slices.Contains(Icons, t.Icon):
 			return fmt.Errorf("tools[%d] (%s): unknown icon %q; available: %s",
 				i, t.Tooltip, t.Icon, strings.Join(Icons, ", "))
+		case t.Letters != "":
+			// Counted in runes: "ЦОД" is three letters and six bytes, and
+			// refusing it would be a bug rather than a limit.
+			if n := utf8.RuneCountInString(t.Letters); n > maxToolLetters {
+				return fmt.Errorf("tools[%d] (%s): letters %q is %d characters; up to %d fit in the rail",
+					i, t.Tooltip, t.Letters, n, maxToolLetters)
+			}
 		}
 		// The query is prepended, so a pipe in it would swallow everything the
 		// operator types into a stage they cannot see.
 		if strings.Contains(t.Query, "|") {
 			return fmt.Errorf("tools[%d] (%s): query may not contain a pipe — it is prepended to what the operator types, so `%s` would apply to their filter too",
 				i, t.Tooltip, t.Query)
+		}
+
+		for j, f := range t.Fields {
+			t.Fields[j] = strings.TrimSpace(f)
+			if t.Fields[j] == "" {
+				return fmt.Errorf("tools[%d] (%s): fields[%d] is empty", i, t.Tooltip, j)
+			}
 		}
 
 		if len(t.AllowedGroups) > 0 && !c.Auth.Enabled {
@@ -313,37 +407,30 @@ func (c *Config) validateTools() error {
 				i, t.Tooltip)
 		}
 
-		t.ID = slug(t.Tooltip)
-		if t.ID == "" {
-			return fmt.Errorf("tools[%d]: tooltip %q has no letters or digits to make an id from", i, t.Tooltip)
-		}
-		if first, dup := seen[t.ID]; dup {
-			return fmt.Errorf("tools[%d] (%s) and tools[%d]: both reduce to the id %q; give them distinguishable tooltips",
-				i, t.Tooltip, first, t.ID)
-		}
-		seen[t.ID] = i
 	}
 
 	return nil
 }
 
-// slug turns a tooltip into the id the URL carries: "Yeti Logs" -> "yeti-logs".
-func slug(s string) string {
-	var b strings.Builder
-	dash := false
-	for _, r := range strings.ToLower(s) {
-		switch {
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
-			b.WriteRune(r)
-			dash = false
-		default:
-			// Runs of punctuation collapse to one dash, and leading ones are
-			// dropped entirely.
-			if !dash && b.Len() > 0 {
-				b.WriteByte('-')
-				dash = true
-			}
+// firstBadIDRune reports the first character an id may not contain, or zero.
+//
+// The id ends up in a URL and in a query parameter, so it stays to characters
+// that need no encoding to read — with the exception of letters outside ASCII,
+// which are percent-encoded by the browser and perfectly legible in a config.
+func firstBadIDRune(id string) rune {
+	for _, r := range id {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			continue
 		}
+		return r
 	}
-	return strings.TrimRight(b.String(), "-")
+	return 0
+}
+
+// orUnnamed keeps an error message readable when the tool has no tooltip either.
+func orUnnamed(tooltip string) string {
+	if tooltip == "" {
+		return "unnamed"
+	}
+	return tooltip
 }

@@ -79,9 +79,10 @@ config:
   # Icons in the left rail. Each scopes the session to a slice of the logs, and
   # the filter is applied by the server on every request.
   # tools:
-  #   - tooltip: main
+  #   - id: main
   #     icon: gear
-  #   - tooltip: Yeti Logs
+  #   - id: yeti
+  #     tooltip: Yeti Logs
   #     icon: yeti
   #     query: 'named_tags.system: yeti'
 
@@ -219,6 +220,27 @@ podMonitor:
   scrapeTimeout: 10s
   relabelings: []
   metricRelabelings: []
+
+# ---------------------------------------------------------------------------
+# PrometheusRule — the alerting rules from alerts/vlui.yml, which is the same
+# file the systemd deployments give to vmalert.
+#
+# Requires the monitoring.coreos.com CRDs, and metrics to be exported at all.
+# Like the PodMonitor, whether your Prometheus loads it depends on its
+# ruleSelector — most kube-prometheus-stack installs want a release label.
+# ---------------------------------------------------------------------------
+prometheusRule:
+  enabled: false
+  labels: {}
+  annotations: {}
+
+  # Added to every alert. For routing in Alertmanager: which cluster or team
+  # this vlui belongs to.
+  extraLabels: {}
+  #  cluster: production
+
+  # How often the rules are evaluated. Empty leaves it to Prometheus.
+  interval: ""
 
 # ---------------------------------------------------------------------------
 # Pod

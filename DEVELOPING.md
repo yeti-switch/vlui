@@ -83,10 +83,29 @@ just edited:
 /opt/vlui/bin/vlui -config /opt/vlui/etc/config.yml -check-config
 ```
 
+## Alert rules
+
+`deploy/alerts/vlui.yml` is canonical, in the same vmalert format as the other
+yeti services' rules. `charts/vlui/alerts/vlui.yml` is a copy the Helm chart
+renders into a PrometheusRule — Helm cannot read files outside a chart, so after
+editing the canonical one:
+
+```sh
+cp deploy/alerts/vlui.yml charts/vlui/alerts/vlui.yml
+promtool check rules deploy/alerts/vlui.yml
+cd deploy/alerts && promtool test rules vlui_test.yml
+```
+
+`go test ./internal/` fails if the copies differ, if a rule names a metric the
+exporter does not have, or if an upstream-error alert matches `status!="ok"` —
+that one includes the 400 VictoriaLogs returns for a mistyped query, so it would
+page somebody for a typo.
+
 ## Layout
 
 ```
 cmd/vlui/          flags, wiring, the root router, graceful shutdown
+deploy/alerts/     vmalert rules, and their promtool tests
 internal/config/   the single YAML file; defaults, normalisation, validation
 internal/vl/       VictoriaLogs client — streaming query/tail, hits, facets, fields
 internal/api/      /api/* — parameter clamping, tool filters, error mapping

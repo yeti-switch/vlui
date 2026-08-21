@@ -179,12 +179,15 @@ func TestValidation(t *testing.T) {
 func TestTools(t *testing.T) {
 	cfg, err := config.Load(write(t, `
 tools:
-  - tooltip: "main"
+  - id: main
+    tooltip: "main"
     icon: gear
-  - tooltip: "Yeti Logs"
+  - id: yeti
+    tooltip: "Yeti Logs"
     icon: yeti
     query: "named_tags.system: yeti"
-  - tooltip: "API Logs"
+  - id: api
+    tooltip: "API Logs"
     icon: bolt
     query: "system: api"
 `))
@@ -195,9 +198,9 @@ tools:
 	if len(cfg.Tools) != 3 {
 		t.Fatalf("got %d tools", len(cfg.Tools))
 	}
-	// The id is derived, not configured, so a link to a tool survives the list
-	// being reordered.
-	want := []string{"main", "yeti-logs", "api-logs"}
+	// The id is configured, and the order is the file's — the first tool is
+	// what a request naming no tool gets, so both matter.
+	want := []string{"main", "yeti", "api"}
 	for i, id := range want {
 		if cfg.Tools[i].ID != id {
 			t.Errorf("tools[%d].id = %q, want %q", i, cfg.Tools[i].ID, id)
@@ -206,6 +209,42 @@ tools:
 	// A tool with no query is legitimate: it is the "everything" entry.
 	if cfg.Tools[0].Query != "" {
 		t.Errorf("tools[0].query = %q, want empty", cfg.Tools[0].Query)
+	}
+}
+
+// The id is what the URL carries and what every request sends, so it cannot be
+// optional and cannot repeat.
+func TestToolIDs(t *testing.T) {
+	cases := map[string]string{
+		"tools:\n  - tooltip: X\n    icon: gear\n":                           "id must be set",
+		"tools:\n  - id: a b\n    icon: gear\n":                              "use letters, digits",
+		"tools:\n  - id: api/logs\n    icon: gear\n":                         "use letters, digits",
+		"tools:\n  - id: api\n    icon: gear\n  - id: api\n    icon: bolt\n": "has to be unique",
+	}
+	for body, want := range cases {
+		t.Run(want, func(t *testing.T) {
+			_, err := config.Load(write(t, body))
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to mention %q", err, want)
+			}
+		})
+	}
+
+	// A tooltip is the label; without one the id is a perfectly good label.
+	cfg, err := config.Load(write(t, "tools:\n  - id: billing\n    letters: B\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools[0].Tooltip != "billing" {
+		t.Errorf("tooltip = %q, want it to fall back to the id", cfg.Tools[0].Tooltip)
+	}
+
+	// Non-ASCII ids are fine: they are percent-encoded in the URL.
+	if _, err := config.Load(write(t, "tools:\n  - id: цод\n    letters: ЦОД\n")); err != nil {
+		t.Errorf("a Cyrillic id was refused: %v", err)
 	}
 }
 
@@ -218,37 +257,27 @@ func TestToolValidation(t *testing.T) {
 		{
 			// Would render as a blank square with no way to tell why.
 			name: "unknown icon",
-			body: "tools:\n  - tooltip: X\n    icon: sparkles\n",
+			body: "tools:\n  - id: x\n    icon: sparkles\n",
 			want: "unknown icon",
 		},
 		{
-			name: "no tooltip",
-			body: "tools:\n  - icon: gear\n",
-			want: "tooltip must be set",
-		},
-		{
-			// The filter is prepended, so a pipe would swallow the operator's
-			// own query into a stage they cannot see.
+			// The filter is combined with the operator's query, so a pipe would
+			// swallow it into a stage they cannot see.
 			name: "pipe in query",
-			body: "tools:\n  - tooltip: X\n    icon: gear\n    query: 'error | stats count()'\n",
+			body: "tools:\n  - id: x\n    icon: gear\n    query: 'error | stats count()'\n",
 			want: "may not contain a pipe",
-		},
-		{
-			name: "colliding ids",
-			body: "tools:\n  - tooltip: 'API Logs'\n    icon: gear\n  - tooltip: 'api logs'\n    icon: bolt\n",
-			want: "distinguishable tooltips",
 		},
 		{
 			// Nothing to match the groups against, so the restriction would let
 			// everyone through — worse than no restriction, because it reads
 			// like one.
 			name: "groups without auth",
-			body: "tools:\n  - tooltip: X\n    icon: gear\n    query: 'a:b'\n    allowed_groups: [noc]\n",
+			body: "tools:\n  - id: x\n    icon: gear\n    query: 'a:b'\n    allowed_groups: [noc]\n",
 			want: "needs auth.enabled",
 		},
 		{
 			name: "groups on an unfiltered tool",
-			body: "auth:\n  enabled: true\n  issuer: https://idp.example\n  client_id: x\n  redirect_url: https://x/cb\n  cookie_secret: 0123456789012345678901234567890123\ntools:\n  - tooltip: X\n    icon: gear\n    allowed_groups: [noc]\n",
+			body: "auth:\n  enabled: true\n  issuer: https://idp.example\n  client_id: x\n  redirect_url: https://x/cb\n  cookie_secret: 0123456789012345678901234567890123\ntools:\n  - id: x\n    icon: gear\n    allowed_groups: [noc]\n",
 			want: "restricts nothing",
 		},
 	}
@@ -263,5 +292,92 @@ func TestToolValidation(t *testing.T) {
 				t.Errorf("error = %v, want it to mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestToolFields(t *testing.T) {
+	cfg, err := config.Load(write(t, `
+tools:
+  - id: main
+    tooltip: main
+    icon: gear
+  - id: yeti
+    tooltip: Yeti Logs
+    icon: yeti
+    query: 'a:b'
+    fields: [_time, level, host, _msg]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Absent means the UI's own default, not an error: most tools want _time
+	// and _msg like everything else.
+	if cfg.Tools[0].Fields != nil {
+		t.Errorf("tools[0].fields = %v, want nil", cfg.Tools[0].Fields)
+	}
+	want := []string{"_time", "level", "host", "_msg"}
+	if strings.Join(cfg.Tools[1].Fields, ",") != strings.Join(want, ",") {
+		t.Errorf("tools[1].fields = %v, want %v", cfg.Tools[1].Fields, want)
+	}
+
+	// An empty entry would render as a column with no name and no values.
+	if _, err := config.Load(write(t, "tools:\n  - id: x\n    tooltip: X\n    icon: gear\n    fields: ['_time', '']\n")); err == nil {
+		t.Error("an empty field name must be refused")
+	}
+}
+
+func TestToolLetters(t *testing.T) {
+	cfg, err := config.Load(write(t, `
+tools:
+  - id: all
+    tooltip: Everything
+    icon: globe
+  - id: api
+    tooltip: API Logs
+    letters: API
+    query: 'system: api'
+  - id: цод
+    tooltip: ЦОД
+    letters: ЦОД
+    query: 'system: dc'
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Tools[1].Letters != "API" || cfg.Tools[1].Icon != "" {
+		t.Errorf("tools[1] = %+v", cfg.Tools[1])
+	}
+	// A tool named in Cyrillic is not doing anything unusual.
+	if cfg.Tools[2].ID != "цод" {
+		t.Errorf("tools[2].id = %q, want цод", cfg.Tools[2].ID)
+	}
+}
+
+func TestToolIconOrLetters(t *testing.T) {
+	cases := map[string]string{
+		// Four characters means a clipped label, which is a worse legend than
+		// none at all.
+		"letters: TOOLONG":             "up to 3",
+		"icon: gear\n    letters: API": "one or the other",
+		"query: 'a:b'":                 "either icon or letters",
+	}
+	for body, want := range cases {
+		t.Run(body, func(t *testing.T) {
+			_, err := config.Load(write(t, "tools:\n  - id: x\n    "+body+"\n"))
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to mention %q", err, want)
+			}
+		})
+	}
+
+	// Counted in runes: three Cyrillic letters are six bytes and must be
+	// accepted.
+	if _, err := config.Load(write(t, "tools:\n  - id: dc\n    letters: ЦОД\n")); err != nil {
+		t.Errorf("three multi-byte letters were refused: %v", err)
 	}
 }

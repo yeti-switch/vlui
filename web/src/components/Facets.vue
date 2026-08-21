@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Facet } from '../types'
 
 const props = defineProps<{
@@ -31,6 +31,44 @@ function toggle(field: string) {
 function isColumn(field: string): boolean {
   return props.columns.includes(field)
 }
+
+/* Searching the panel.
+ *
+ * A log line in a real deployment carries dozens of fields — every tag the
+ * producer set, every label the collector added — so the panel is a long
+ * scroll, and finding `kubernetes_pod_name` in it is the sort of thing people
+ * give up on.
+ *
+ * The match is on the FIELD NAME only. Searching the values as well was
+ * tempting and is the wrong thing: the panel lists the top few values per
+ * field, so a value search would answer from a sample and quietly miss the
+ * value that is there but not in the top ten. The query line searches values,
+ * against all of them, which is where that belongs. */
+const search = ref('')
+
+const shown = computed(() => {
+  const needle = search.value.trim().toLowerCase()
+  if (!needle) return props.facets
+  return props.facets.filter((f) => f.field_name.toLowerCase().includes(needle))
+})
+
+// While searching, everything matching is expanded: a hit that is still
+// collapsed looks like the search failed.
+const searching = computed(() => search.value.trim() !== '')
+
+function isCollapsed(field: string): boolean {
+  return !searching.value && collapsed.value.has(field)
+}
+
+// Clearing the box leaves the panel as the search found it, not as it was
+// before — the reader has been looking at these fields and expanding one they
+// had collapsed is not a surprise worth avoiding.
+watch(
+  () => props.facets,
+  () => {
+    if (!props.facets.length) search.value = ''
+  },
+)
 </script>
 
 <template>
@@ -48,6 +86,20 @@ function isColumn(field: string): boolean {
         <span v-if="loading" class="muted">…</span>
       </header>
 
+      <div v-if="facets.length" class="find">
+        <input
+          v-model="search"
+          type="text"
+          class="mono"
+          placeholder="find a field…"
+          aria-label="Find a field"
+          spellcheck="false"
+          autocomplete="off"
+          @keydown.esc.prevent="search = ''"
+        />
+        <button v-if="search" type="button" class="ghost clear" title="Clear" @click="search = ''">×</button>
+      </div>
+
       <p v-if="tailing" class="empty muted">
         Facets describe a fixed window, so they pause while you are following.
       </p>
@@ -55,9 +107,13 @@ function isColumn(field: string): boolean {
         Run a query to see which fields the matching logs carry.
       </p>
 
-      <section v-for="f in facets" :key="f.field_name">
+      <p v-if="searching && !shown.length" class="empty muted">
+        No field matching “{{ search }}”.
+      </p>
+
+      <section v-for="f in shown" :key="f.field_name">
         <h3 @click="toggle(f.field_name)">
-          <span class="caret">{{ collapsed.has(f.field_name) ? '▸' : '▾' }}</span>
+          <span class="caret">{{ isCollapsed(f.field_name) ? '▸' : '▾' }}</span>
           <span class="name mono">{{ f.field_name }}</span>
           <button
             type="button"
@@ -70,7 +126,7 @@ function isColumn(field: string): boolean {
           </button>
         </h3>
 
-        <ul v-if="!collapsed.has(f.field_name)">
+        <ul v-if="!isCollapsed(f.field_name)">
           <li v-for="v in f.values" :key="v.field_value">
             <button
               type="button"
@@ -161,6 +217,28 @@ header {
 header .muted { margin-left: auto; }
 
 .empty { padding: 10px; font-size: 12px; }
+
+/* Sticky under the header, so it stays reachable in a long list — which is the
+   situation it exists for. */
+.find {
+  position: sticky;
+  top: 29px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-sunken);
+}
+
+.find input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.clear { padding: 0 4px; }
 
 h3 {
   display: flex;

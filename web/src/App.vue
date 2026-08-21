@@ -29,6 +29,64 @@ function toolById(id: string): Tool | null {
   return tools.find((t) => t.id === id) ?? tools[0] ?? null
 }
 
+// The columns a tool shows, when neither the reader nor the config has said
+// otherwise. _msg is the log line; _time is what orders it.
+const DEFAULT_COLUMNS = ['_time', '_msg']
+
+/* Which columns each tool shows, remembered across sessions.
+ *
+ * Kept in localStorage rather than only in memory, because unlike the query
+ * this is a preference rather than a train of thought: the fields worth seeing
+ * for a slice of the logs are the same fields next week, and rebuilding the
+ * column set on every visit is the sort of small tax that makes people stop
+ * using the columns at all.
+ *
+ * Three sources, in order — a link's ?cols= wins, then what this browser
+ * remembers for the tool, then the tool's `fields` from the config. */
+const COLUMNS_KEY = 'vlui.columns'
+
+function storedColumns(): Record<string, string[]> {
+  try {
+    const raw = window.localStorage.getItem(COLUMNS_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    // Anything could be in storage — an older format, or a hand-edited value.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, string[]> = {}
+    for (const [tool, cols] of Object.entries(parsed)) {
+      if (Array.isArray(cols) && cols.every((c) => typeof c === 'string' && c)) {
+        out[tool] = cols as string[]
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+const columnsByTool = ref<Record<string, string[]>>(storedColumns())
+
+function rememberColumns() {
+  columnsByTool.value[activeTool.value] = columns.value
+  try {
+    window.localStorage.setItem(COLUMNS_KEY, JSON.stringify(columnsByTool.value))
+  } catch {
+    // Private window with storage blocked: the columns still work, they just
+    // will not be there next time.
+  }
+}
+
+// What a tool's columns should be when it is selected: this browser's memory
+// first, then the config's defaults, then _time and _msg.
+function columnsFor(id: string): string[] {
+  const remembered = columnsByTool.value[id]
+  if (remembered?.length) return [...remembered]
+
+  const configured = toolById(id)?.fields
+  if (configured?.length) return [...configured]
+
+  return [...DEFAULT_COLUMNS]
+}
+
 /* One query box per tool, remembered as you switch between them.
    
    The tools select different slices of the logs, so a query written for one is
@@ -55,7 +113,7 @@ const limit = ref(500)
 // shallowRef: the rows are replaced wholesale and never mutated field by field,
 // so deep reactivity would cost a proxy per row for nothing.
 const rows = shallowRef<LogRow[]>([])
-const columns = ref<string[]>(['_time', '_msg'])
+const columns = ref<string[]>(DEFAULT_COLUMNS)
 const selectedIndex = ref(-1)
 
 const running = ref(false)
@@ -293,9 +351,11 @@ function toggleColumn(field: string) {
     // way to tell which came first.
     if (field === '_time') return
     columns.value = columns.value.filter((c) => c !== field)
-    return
+  } else {
+    columns.value = [...columns.value, field]
   }
-  columns.value = [...columns.value, field]
+  rememberColumns()
+  writeHash()
 }
 
 // Switching tool changes what every panel is looking at, so it re-runs rather
@@ -307,9 +367,13 @@ function selectTool(id: string) {
   // box — that is a deliberate state for a filtered tool, not an absence.
   if (activeTool.value) queriesByTool.value[activeTool.value] = query.value
 
+  // Columns belong to the tool being left in the same way the query does.
+  rememberColumns()
+
   activeTool.value = id
   const remembered = queriesByTool.value[id]
   query.value = remembered ?? defaultQueryFor(toolById(id))
+  columns.value = columnsFor(id)
 
   writeHash()
   run()
@@ -345,7 +409,7 @@ function writeHash() {
     p.set('start', String(range.value.startMs))
     p.set('end', String(range.value.endMs))
   }
-  if (columns.value.join(',') !== '_time,_msg') p.set('cols', columns.value.join(','))
+  if (columns.value.join(',') !== DEFAULT_COLUMNS.join(',')) p.set('cols', columns.value.join(','))
   history.replaceState(null, '', `#${p.toString()}`)
 }
 
@@ -361,7 +425,6 @@ function readHash(): boolean {
   if (Number.isFinite(l) && l > 0) limit.value = l
 
   const cols = p.get('cols')
-  if (cols) columns.value = cols.split(',').filter(Boolean)
 
   // Only a tool this deployment actually offers, and only one this account was
   // offered: a stale or invented id in a shared link falls back to the default
@@ -374,6 +437,12 @@ function readHash(): boolean {
     if (!q) query.value = defaultQueryFor(toolById(wanted))
   }
   if (q && activeTool.value) queriesByTool.value[activeTool.value] = q
+
+  // Columns come last, once the tool is known: a link's ?cols= is what the
+  // sender was looking at and outranks both this browser's memory and the
+  // config, but without one the tool decides.
+  const linkedColumns = cols ? cols.split(',').filter(Boolean) : []
+  columns.value = linkedColumns.length ? linkedColumns : columnsFor(activeTool.value)
 
   const start = Number(p.get('start'))
   const end = Number(p.get('end'))
@@ -451,6 +520,7 @@ onMounted(async () => {
     // …and the box starts on that tool's default rather than a blanket *,
     // which for a filtered tool would ask for everything twice over.
     query.value = defaultQueryFor(toolById(activeTool.value))
+    columns.value = columnsFor(activeTool.value)
   } catch (e) {
     // A 401 has raised the gate; anything else means the app cannot start, and
     // saying so beats an empty screen.

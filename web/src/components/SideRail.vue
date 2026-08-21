@@ -45,7 +45,10 @@ const emit = defineEmits<{
       :aria-current="t.id === activeTool ? 'true' : undefined"
       @click="emit('select-tool', t.id)"
     >
-      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor"
+      <!-- Letters where a shape would not say enough: past three or four tools
+           the icons stop being distinguishable, while "API" needs no legend. -->
+      <span v-if="t.letters" class="letters" :class="`len-${[...t.letters].length}`">{{ t.letters }}</span>
+      <svg v-else viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor"
            stroke-width="1.7" aria-hidden="true" v-html="iconBody(t.icon)"></svg>
       <span class="tip">
         {{ t.tooltip }}
@@ -99,6 +102,19 @@ const emit = defineEmits<{
   background: var(--accent);
   color: #fff;
 }
+
+/* Letters in place of an icon. Sized by how many there are: three characters at
+   the size of one would spill out of a 40px button, and shrinking all of them
+   to fit the worst case would make "DB" needlessly small. */
+.letters {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.len-1 { font-size: 17px; }
+.len-2 { font-size: 14px; }
+.len-3 { font-size: 11px; letter-spacing: -0.04em; }
 
 /* The filter under the name, so hovering answers "what does this actually
    select?" without a trip to the config file. */

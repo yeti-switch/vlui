@@ -81,6 +81,12 @@ podMonitor:
   # podMonitorSelector never matches this.
   labels:
     release: kube-prometheus-stack
+
+# The alerting rules from deploy/alerts/vlui.yml, as a PrometheusRule.
+prometheusRule:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack
 ```
 
 The PodMonitor scrapes the pod IP directly, which is why the chart rewrites

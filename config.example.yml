@@ -151,6 +151,22 @@ auth:
   # token_url: https://idp.example/token
   # jwks_url:  https://idp.example/jwks
 
+# What the browser tab says this is. Both are written into the page when the
+# server starts rather than set by the JavaScript, so they are right before the
+# app has loaded and on the login page too — which matters when three of these
+# are open in three tabs.
+#
+# ui:
+#   title: Yeti production logs
+#
+#   # A path to an image on THIS host: svg, png, ico, jpeg, gif or webp. Read
+#   # once at startup and served from memory, so replacing it needs a restart.
+#   #
+#   # A local file rather than a URL because the page's Content-Security-Policy
+#   # allows images from its own origin only — an icon hosted elsewhere would be
+#   # blocked by the browser and the tab would quietly keep the default.
+#   favicon: /opt/vlui/etc/logo.svg
+
 # Preset queries, offered in a dropdown next to the query line. Deployment
 # knowledge — "how do I find SIP errors here" — belongs with the deployment
 # rather than in each operator's browser history.
@@ -177,8 +193,16 @@ auth:
 # front of the query would be escapable through a subquery — VictoriaLogs'
 # own documentation names extra_filters as the mechanism for access control.
 #
-# icon: one of gear, yeti, bolt, bug, chart, cloud, database, globe, lock,
-#       phone, server, tag, terminal. An unknown name fails at startup.
+# id:      REQUIRED and unique. It is what the URL carries and what every
+#          request sends, so treat it as a name rather than a label: renaming it
+#          breaks existing links to that tool.
+# tooltip: the label shown on hover. Defaults to the id.
+# icon:    one of gear, yeti, bolt, bug, chart, cloud, database, globe, lock,
+#          phone, server, tag, terminal. An unknown name fails at startup.
+# letters: up to three characters drawn in place of an icon — "API", "SIP",
+#          "DB". Past three or four tools the abstract shapes stop being
+#          distinguishable from each other, while three letters of the system's
+#          own name need no legend. One or the other, not both.
 # query: optional, and may not contain a pipe (it is combined with the
 #        operator's query, so a pipe would swallow it).
 #
@@ -188,15 +212,22 @@ auth:
 # empty query stays an error.
 #
 # tools:
-#   - tooltip: main
+#   - id: main
+#     tooltip: Everything
 #     icon: gear
 #
-#   - tooltip: Yeti Logs
+#   - id: yeti
+#     tooltip: Yeti Logs
 #     icon: yeti
 #     query: 'named_tags.system: yeti'
+#     # Columns this tool opens with. A default only: whatever the reader
+#     # selects afterwards is remembered in their browser and wins. Omit for
+#     # _time and _msg.
+#     fields: [_time, level, host, _msg]
 #
-#   - tooltip: API Logs
-#     icon: bolt
+#   - id: api
+#     # No tooltip: the id is the label.
+#     letters: API
 #     query: 'system: api'
 #
 # IS THIS ACCESS CONTROL? Only if you make it so. By default every signed-in
@@ -215,7 +246,7 @@ auth:
 # auth.groups_claim. A tool the account may not use is refused (403) AND left
 # out of /api/config, so it never appears in their rail:
 #
-#   - tooltip: Billing
+#   - id: billing
 #     icon: lock
 #     query: 'system: billing'
 #     allowed_groups: [billing, admin]
@@ -230,14 +261,16 @@ auth:
 #
 # Worth alerting on:
 #
-#   # VictoriaLogs is refusing our requests. The endpoint and status labels say
-#   # which call and why.
+#   # VictoriaLogs failing. NOT status!="ok" — that includes the 400 it returns
+#   # for a mistyped LogsQL query, which would page somebody for a typo.
 #   - alert: VictoriaLogsErrors
-#     expr: rate(vlui_vl_requests_total{status!="ok"}[5m]) > 0
+#     expr: rate(vlui_vl_requests_total{status=~"error|5.."}[5m]) > 0
 #
 #   # VictoriaLogs is unreachable. Only exported when probe_interval is set.
 #   - alert: VictoriaLogsDown
 #     expr: vlui_vl_up == 0
+#
+# Ready-made rules for all of this are in deploy/alerts/vlui.yml.
 #
 # Also exported: http_requests_total{route,status}, http_request_duration_seconds,
 # vl_request_duration_seconds, query_rows_total, query_bytes_total,
@@ -258,5 +291,5 @@ metrics:
   # they are needed.
   #
   # Set it to 0 to disable both the probe and the gauge, and alert on
-  # rate(vlui_vl_requests_total{status!="ok"}[5m]) instead.
+  # rate(vlui_vl_requests_total{status=~"error|5.."}[5m]) instead.
   probe_interval: 15s

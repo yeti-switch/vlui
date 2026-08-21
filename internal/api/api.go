@@ -100,10 +100,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type toolJSON struct {
-		ID      string `json:"id"`
-		Tooltip string `json:"tooltip"`
-		Icon    string `json:"icon"`
-		Query   string `json:"query"`
+		ID      string   `json:"id"`
+		Tooltip string   `json:"tooltip"`
+		Icon    string   `json:"icon"`
+		Letters string   `json:"letters"`
+		Query   string   `json:"query"`
+		Fields  []string `json:"fields"`
 	}
 
 	out := struct {
@@ -147,7 +149,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if !s.permitted(r, t) {
 			continue
 		}
-		out.Tools = append(out.Tools, toolJSON{ID: t.ID, Tooltip: t.Tooltip, Icon: t.Icon, Query: t.Query})
+		out.Tools = append(out.Tools, toolJSON{
+			ID: t.ID, Tooltip: t.Tooltip, Icon: t.Icon, Letters: t.Letters,
+			Query: t.Query, Fields: t.Fields,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, out)

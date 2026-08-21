@@ -1,0 +1,70 @@
+rule_files:
+  - vlui.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A 400 from VictoriaLogs is a mistyped query. It must not page anyone.
+  - interval: 1m
+    input_series:
+      - series: 'vlui_build_info{version="1.0.0"}'
+        values: '1x30'
+      - series: 'vlui_vl_up'
+        values: '1x30'
+      - series: 'vlui_vl_requests_total{endpoint="/select/logsql/query",status="400"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VluiVictoriaLogsErrors
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VluiDown
+        exp_alerts: []
+
+  # A 502, or a transport failure, is VictoriaLogs being unwell.
+  - interval: 1m
+    input_series:
+      - series: 'vlui_build_info{version="1.0.0"}'
+        values: '1x30'
+      - series: 'vlui_vl_requests_total{endpoint="/select/logsql/query",status="502"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VluiVictoriaLogsErrors
+        exp_alerts:
+          - exp_labels:
+              severity: major
+              endpoint: /select/logsql/query
+              status: "502"
+            exp_annotations:
+              msg: "VictoriaLogs failing on /select/logsql/query (status 502) for 10 minutes"
+
+  # The probe says VictoriaLogs is unreachable.
+  - interval: 1m
+    input_series:
+      - series: 'vlui_build_info{version="1.0.0"}'
+        values: '1x30'
+      - series: 'vlui_vl_up'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: VluiVictoriaLogsDown
+        exp_alerts:
+          - exp_labels:
+              severity: major
+            exp_annotations:
+              msg: "vlui cannot reach VictoriaLogs — every query, histogram and live tail is failing"
+
+  # Nothing scraped at all: the one that has to fire when the others cannot.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="vlui"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: VluiDown
+        exp_alerts:
+          - exp_labels:
+              severity: major
+            exp_annotations:
+              msg: "vlui is not being scraped — the process is down or the scrape target is wrong"

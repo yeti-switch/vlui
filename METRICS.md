@@ -63,31 +63,34 @@ disappears rather than freezing, and you alert on the error rate instead.
 
 ## Alerting
 
-```yaml
-groups:
-  - name: vlui
-    rules:
-      # VictoriaLogs is unreachable. Only exists when probe_interval is set.
-      - alert: VictoriaLogsDown
-        expr: vlui_vl_up == 0
-        for: 2m
+Rules ship with the repo: **[deploy/alerts/vlui.yml](deploy/alerts/vlui.yml)**,
+in the same format as the other yeti services' vmalert rules. Drop it beside
+them in the ansible victoria-metrics role, or let the Helm chart install it as a
+PrometheusRule (`prometheusRule.enabled=true`).
 
-      # VictoriaLogs is refusing our requests. The endpoint and status labels
-      # say which call and why, so the alert is actionable.
-      - alert: VictoriaLogsErrors
-        expr: rate(vlui_vl_requests_total{status!="ok"}[5m]) > 0
-        for: 5m
+| alert | fires when | severity |
+| --- | --- | --- |
+| `VluiDown` | nothing is being scraped at all | major |
+| `VluiVictoriaLogsDown` | the health probe fails for 5m | major |
+| `VluiVictoriaLogsErrors` | transport failures or 5xx from VictoriaLogs for 10m | major |
+| `VluiInternalErrors` | vlui returns 500 for 10m | minor |
+| `VluiQueriesStuck` | queries in flight for 15m | minor |
+| `VluiSlowQueries` | 90th percentile time-to-first-row over 30s | minor |
 
-      # Somebody's browser tab has been holding a query open. Normal for a live
-      # tail; suspicious for `queries_active`, which should be seconds at a time.
-      - alert: VluiQueriesStuck
-        expr: vlui_queries_active > 5
-        for: 15m
+Nothing is `critical`: vlui is how you read logs, not how calls get routed. If
+it is down at 3am the logs are still being collected.
+
+One thing worth knowing if you write your own: **do not alert on
+`vlui_vl_requests_total{status!="ok"}`.** The status label carries the upstream
+HTTP code, and a 400 is almost always a LogsQL syntax error — somebody mistyped
+a query. That rule pages a human for a typo. Match `status=~"error|5.."`
+instead, which is what the shipped rules do.
+
+`deploy/alerts/vlui_test.yml` is a promtool test for these, including that case:
+
+```sh
+cd deploy/alerts && promtool test rules vlui_test.yml
 ```
-
-With `probe_interval: 0` there is no `vl_up`, so `VictoriaLogsDown` never fires
-and `VictoriaLogsErrors` is the only signal — which is the trade, and why the
-probe is on by default.
 
 ## Looking at it by hand
 

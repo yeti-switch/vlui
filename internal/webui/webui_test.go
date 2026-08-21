@@ -1,10 +1,14 @@
 package webui_test
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/yeti-switch/vlui/internal/webui"
 	"github.com/yeti-switch/vlui/web"
@@ -12,7 +16,7 @@ import (
 
 func get(t *testing.T, base, path string) *http.Response {
 	t.Helper()
-	h := webui.Handler(web.Dist(), base)
+	h := webui.Handler(web.Dist(), webui.Options{Base: base})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 	return rec.Result()
@@ -119,4 +123,157 @@ func TestDeepLinkUnderBasePathFallsBackToIndex(t *testing.T) {
 			t.Errorf("base %q: a deep link should serve the base-aware index", base)
 		}
 	}
+}
+
+// The tab's title and icon are written into the HTML at serve time, not set by
+// the SPA: they have to be right before any JavaScript runs, and on the login
+// page, which is served to people with no session.
+func TestTitleAndFavicon(t *testing.T) {
+	dist := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte(
+			`<!doctype html><html><head><title>vlui — VictoriaLogs</title>` +
+				`<link rel="icon" type="image/svg+xml" href="./favicon.svg"></head><body></body></html>`)},
+		"favicon.svg": &fstest.MapFile{Data: []byte("<svg/>")},
+	}
+
+	t.Run("defaults are left alone", func(t *testing.T) {
+		body := serve(t, dist, webui.Options{}, "/")
+		if !strings.Contains(body, "<title>vlui — VictoriaLogs</title>") {
+			t.Errorf("the shipped title was changed: %s", body)
+		}
+		if strings.Count(body, `rel="icon"`) != 1 {
+			t.Errorf("want exactly the shipped icon link: %s", body)
+		}
+	})
+
+	t.Run("configured title replaces the shipped one", func(t *testing.T) {
+		body := serve(t, dist, webui.Options{Title: "Yeti production logs"}, "/")
+		if !strings.Contains(body, "<title>Yeti production logs</title>") {
+			t.Errorf("title not applied: %s", body)
+		}
+		// Two <title> elements are not an error a browser reports — it uses the
+		// first and ignores the rest — so appending instead of replacing would
+		// look like the setting did nothing.
+		if strings.Count(body, "<title>") != 1 {
+			t.Errorf("want exactly one title element: %s", body)
+		}
+	})
+
+	t.Run("a title cannot break the document", func(t *testing.T) {
+		body := serve(t, dist, webui.Options{Title: `</title><script>alert(1)</script>`}, "/")
+		if strings.Contains(body, "<script>alert(1)</script>") {
+			t.Errorf("the title was not escaped: %s", body)
+		}
+	})
+
+	t.Run("configured favicon replaces the shipped link", func(t *testing.T) {
+		icon := writeIcon(t, "logo.svg", "<svg>custom</svg>")
+		fav, err := webui.LoadFavicon(icon, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		body := serve(t, dist, webui.Options{Favicon: fav}, "/")
+		// Exactly one, and it is ours: with two links the browser picks by its
+		// own rules — commonly the last, which would be the default — and the
+		// configured icon becomes a coin toss between engines.
+		if n := strings.Count(body, `rel="icon"`); n != 1 {
+			t.Fatalf("want exactly one icon link, got %d: %s", n, body)
+		}
+		if !strings.Contains(body, fav.Path) {
+			t.Errorf("the configured icon is not linked: %s", body)
+		}
+
+		// And it is actually served, from memory, at that hashed path.
+		res := request(t, dist, webui.Options{Favicon: fav}, fav.Path)
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s = %d", fav.Path, res.Code)
+		}
+		if got := res.Header().Get("Content-Type"); got != "image/svg+xml" {
+			t.Errorf("content type = %q", got)
+		}
+		if res.Body.String() != "<svg>custom</svg>" {
+			t.Errorf("body = %q", res.Body.String())
+		}
+
+		// A browser asks for this one unprompted. Answering with the SPA's HTML
+		// — which the history fallback would otherwise do — is worse than
+		// answering with the icon.
+		if got := request(t, dist, webui.Options{Favicon: fav}, "/favicon.ico"); got.Code != http.StatusOK ||
+			got.Header().Get("Content-Type") != "image/svg+xml" {
+			t.Errorf("/favicon.ico = %d %q", got.Code, got.Header().Get("Content-Type"))
+		}
+	})
+
+	t.Run("the icon path carries the base path", func(t *testing.T) {
+		icon := writeIcon(t, "logo.png", "notreallypng")
+		fav, err := webui.LoadFavicon(icon, "/logs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(fav.Path, "/logs/favicon.") {
+			t.Errorf("path = %q, want it under /logs", fav.Path)
+		}
+		if fav.ContentType != "image/png" {
+			t.Errorf("content type = %q", fav.ContentType)
+		}
+	})
+
+	t.Run("the name changes when the file does", func(t *testing.T) {
+		a, err := webui.LoadFavicon(writeIcon(t, "a.svg", "<svg>one</svg>"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := webui.LoadFavicon(writeIcon(t, "b.svg", "<svg>two</svg>"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The path carries a content hash, which is what lets it be cached for a
+		// year without outliving the rebrand that replaced it.
+		if a.Path == b.Path {
+			t.Errorf("two different icons share the path %q", a.Path)
+		}
+	})
+}
+
+func TestFaviconRefusesWhatBrowsersCannotUse(t *testing.T) {
+	cases := map[string]string{
+		"unknown extension": writeIcon(t, "logo.bmp", "x"),
+		"no extension":      writeIcon(t, "logo", "x"),
+		"empty file":        writeIcon(t, "empty.svg", ""),
+		"missing file":      filepath.Join(t.TempDir(), "nope.svg"),
+	}
+	for name, path := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := webui.LoadFavicon(path, ""); err == nil {
+				t.Error("want an error")
+			}
+		})
+	}
+
+	// Not configured is not an error: the SPA ships one.
+	if fav, err := webui.LoadFavicon("", ""); err != nil || fav != nil {
+		t.Errorf("empty path = %v, %v; want nil, nil", fav, err)
+	}
+}
+
+func writeIcon(t *testing.T, name, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func serve(t *testing.T, dist fs.FS, opts webui.Options, path string) string {
+	t.Helper()
+	return request(t, dist, opts, path).Body.String()
+}
+
+func request(t *testing.T, dist fs.FS, opts webui.Options, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	webui.Handler(dist, opts).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
 }

@@ -40,12 +40,91 @@ const start = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT
 const count = computed(() => Math.ceil(viewportHeight.value / ROW_HEIGHT) + OVERSCAN * 2)
 const visible = computed(() => props.rows.slice(start.value, start.value + count.value))
 
+/* Column widths, measured from the data rather than divided out of the window.
+ *
+ * The rows are separate grids sharing one template — that is what keeps a
+ * virtualised table aligned — so a column cannot size itself to its own
+ * content the way a real <table> would. It has to be computed.
+ *
+ * The previous template handed every extra column `minmax(90px, 1fr)`, which
+ * fails in both directions: in a wide window the columns stretch to fill and
+ * the row never overflows, so there is no horizontal scrollbar however long the
+ * values are; in a narrow one they collapse to 90px and ellipsize a timestamp
+ * that needs 149. Either way the reader cannot see the value, and scrolling
+ * does not help because the text is cut off INSIDE the column.
+ *
+ * The cell font is monospace, so a character count converts exactly to pixels
+ * once one character has been measured. */
+const MIN_COLUMN = 70
+const MAX_COLUMN = 400
+// _msg is the log line and deserves more room, but not an unbounded amount: one
+// stack trace should not push every other column off a 4000px scroll.
+const MAX_MSG = 720
+const CELL_PADDING = 18 // .cell's 8px either side, plus a little air
+
+// Rows are sampled rather than scanned: 5000 rows times a dozen columns on
+// every streamed batch would be real work, and the widest value in the first
+// few hundred is what the reader is looking at anyway.
+const WIDTH_SAMPLE = 300
+
+// The header's remove button sits beside the name and takes its width even
+// while it is invisible, so the name has to be given room for it or a short
+// column like "level" shows as "lev…" over values that fit perfectly.
+//
+// The button, the flex gap beside it, and a couple of pixels of slack: the name
+// is set in the sans body font while these widths are computed from the
+// monospace cell font, so the estimate has to err wide. It was one pixel short
+// before, which is all an ellipsis needs.
+const DROP_BUTTON = 28
+
+const charWidth = ref(7.2) // replaced by a real measurement on mount
+
+// Measured by laying out a real cell rather than through canvas font parsing:
+// the cells are monospace 12px while the table around them is the sans body
+// font, and measuring the wrong one is how every column ends up subtly wrong.
+function measureCharWidth(scroller: HTMLElement): number {
+  const probe = document.createElement('div')
+  probe.className = 'cell mono'
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;padding:0;width:auto'
+  probe.textContent = '0'.repeat(100)
+
+  scroller.appendChild(probe)
+  const w = probe.getBoundingClientRect().width / 100
+  probe.remove()
+
+  return w > 0 ? w : 7.2
+}
+
+const columnWidths = computed<number[]>(() => {
+  const sample = props.rows.length > WIDTH_SAMPLE ? props.rows.slice(0, WIDTH_SAMPLE) : props.rows
+
+  return props.columns.map((column) => {
+    let widest = 0
+    for (const row of sample) {
+      const len = cell(row, column).length
+      if (len > widest) widest = len
+    }
+    const content = widest * charWidth.value + CELL_PADDING
+
+    // The header is its own constraint, and a different font: smaller, and not
+    // monospace, so its name is measured generously rather than exactly.
+    const removable = column !== '_time' && column !== '_msg'
+    const header = column.length * charWidth.value + CELL_PADDING + (removable ? DROP_BUTTON : 0)
+
+    const max = column === '_msg' ? MAX_MSG : MAX_COLUMN
+    return Math.round(Math.min(Math.max(content, header, MIN_COLUMN), max))
+  })
+})
+
 const gridTemplate = computed(() =>
   props.columns
-    .map((c) => {
-      if (c === '_time') return '188px'
-      if (c === '_msg') return 'minmax(320px, 4fr)'
-      return 'minmax(90px, 1fr)'
+    .map((c, i) => {
+      const w = columnWidths.value[i] ?? MIN_COLUMN
+      // _msg takes any slack going, so a table narrower than the window does
+      // not leave a stripe of empty grid down the right-hand side. Every other
+      // column is exactly as wide as its content needs, which is what makes the
+      // row overflow — and the scrollbar appear — when they do not all fit.
+      return c === '_msg' ? `minmax(${w}px, 1fr)` : `${w}px`
     })
     .join(' '),
 )
@@ -81,6 +160,7 @@ function mounted(el: Element | null) {
     scroller.value = el
     observer.observe(el)
     measure()
+    charWidth.value = measureCharWidth(el)
   }
 }
 </script>

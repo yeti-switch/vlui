@@ -13,8 +13,14 @@ export interface Preset {
 export interface Tool {
   id: string
   tooltip: string
+  // One or the other: a shape from icons.ts, or up to three characters drawn in
+  // its place. The config refuses both.
   icon: string
+  letters: string
   query: string
+  // The columns this tool opens with, from the config. A default: whatever the
+  // reader picks afterwards is remembered in their browser and wins.
+  fields: string[]
 }
 
 export interface User {

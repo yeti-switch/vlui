@@ -27,14 +27,15 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
 - **Results table** — virtualised. Click a row to see every field; filter,
   exclude, or promote one to a column.
 - **Hits histogram** — matches over the window. Drag to zoom.
-- **Field sidebar** — the most frequent values per field, one click to filter.
+- **Field sidebar** — the most frequent values per field, searchable by field
+  name, one click to filter.
 - **Live tailing** — follow new logs as they arrive.
 - **Timestamps** in the timezone you pick.
 - **Tools** — configurable icons in the left rail, each scoping the session to a
   slice of the logs. Applied server-side.
 - **Shareable state** — query, window, row cap and columns live in the URL.
 - **OIDC login** — any conformant provider.
-- **Prometheus exporter** — built in, optional.
+- **Prometheus exporter** — built in, optional, with alerting rules included.
 
 ## Installing
 
@@ -58,7 +59,16 @@ victorialogs:
 ```
 
 `listen` defaults to `127.0.0.1:8080`; everything else is off until you ask for
-it. Authentication needs an OIDC client:
+it. The tab's title and icon are worth setting when several of these are open at
+once:
+
+```yaml
+ui:
+  title: Yeti production logs
+  favicon: /opt/vlui/etc/logo.svg    # a file on this host; svg, png, ico, …
+```
+
+Authentication needs an OIDC client:
 
 ```yaml
 auth:
@@ -83,21 +93,34 @@ process. To publish two, run two instances.
 
 ```yaml
 tools:
-  - tooltip: main
+  - id: main
+    tooltip: Everything
     icon: gear
 
-  - tooltip: Yeti Logs
+  - id: yeti
+    tooltip: Yeti Logs
     icon: yeti
     query: 'named_tags.system: yeti'
+    fields: [_time, level, host, _msg]
+
+  - id: api
+    letters: API              # up to three characters, instead of an icon
+    query: 'system: api'
 ```
+
+`id` is required and unique — it is what the URL carries and what each request
+sends, so renaming one breaks links to it. `tooltip` defaults to the id.
 
 Each entry is an icon in the rail, labelled on hover. Selecting one scopes
 everything — rows, histogram, facets, autocomplete, live tail — to its query,
-shown as a static prefix beside the input. Each tool keeps its own query, and a
-tool with a filter accepts an empty box.
+shown as a static prefix beside the input. Each tool keeps its own query and its
+own columns; `fields` is the default set, and whatever the reader picks is
+remembered per tool in their browser.
 
-Icons: `gear`, `yeti`, `bolt`, `bug`, `chart`, `cloud`, `database`, `globe`,
-`lock`, `phone`, `server`, `tag`, `terminal`.
+Each tool carries either an `icon` or up to three `letters` — past a handful of
+tools the abstract shapes stop being distinguishable, while `API` needs no
+legend. Icons: `gear`, `yeti`, `bolt`, `bug`, `chart`, `cloud`, `database`,
+`globe`, `lock`, `phone`, `server`, `tag`, `terminal`.
 
 The filter is applied by the **server**, from the tool's id, as VictoriaLogs
 `extra_filters` — never composed in the browser, and a request naming no tool
@@ -105,7 +128,7 @@ gets the first tool's filter. To make the rail a boundary rather than a set of
 shortcuts, gate the wide tools with `allowed_groups` (needs `auth.enabled`):
 
 ```yaml
-  - tooltip: Billing
+  - id: billing
     icon: lock
     query: 'system: billing'
     allowed_groups: [billing, admin]

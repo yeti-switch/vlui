@@ -83,6 +83,12 @@ func run() error {
 				return err
 			}
 		}
+		// Likewise the favicon: it is a path to a file this process must be able
+		// to read and recognise, and "config OK" for one that does not exist
+		// would be a check that misses the only thing about it that can fail.
+		if _, err := webui.LoadFavicon(cfg.UI.Favicon, cfg.BasePath); err != nil {
+			return err
+		}
 		fmt.Printf("config OK: %s\n", describe(cfg))
 		return nil
 	}
@@ -123,11 +129,18 @@ func run() error {
 		log.Warn("authentication is disabled: every request is anonymous")
 	}
 
+	// Read at startup, so a missing or unusable file is a refusal to start
+	// rather than a tab that quietly shows no icon.
+	favicon, err := webui.LoadFavicon(cfg.UI.Favicon, cfg.BasePath)
+	if err != nil {
+		return err
+	}
+
 	apiSrv := api.New(cfg, client, a, m, log, version, commit)
 
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: router(cfg, apiSrv, log),
+		Handler: router(cfg, apiSrv, favicon, log),
 		// Header timeout only. A read timeout would cap how long a query may
 		// take, and a write timeout would cut live tailing off mid-stream —
 		// both are bounded by their own contexts instead.
@@ -177,7 +190,7 @@ func run() error {
 
 // router mounts the whole application under base_path: the API, the health
 // endpoint and the SPA. The metrics listener is deliberately not here.
-func router(cfg config.Config, apiSrv *api.Server, log *slog.Logger) http.Handler {
+func router(cfg config.Config, apiSrv *api.Server, favicon *webui.Favicon, log *slog.Logger) http.Handler {
 	app := chi.NewRouter()
 	app.Use(middleware.Recoverer)
 	app.Use(securityHeaders)
@@ -193,7 +206,11 @@ func router(cfg config.Config, apiSrv *api.Server, log *slog.Logger) http.Handle
 
 	// The SPA shell is served to anyone: it is only JavaScript, and it asks
 	// /api/auth/me who it is talking to before it shows anything.
-	app.Handle("/*", webui.Handler(web.Dist(), cfg.BasePath))
+	app.Handle("/*", webui.Handler(web.Dist(), webui.Options{
+		Base:    cfg.BasePath,
+		Title:   cfg.UI.Title,
+		Favicon: favicon,
+	}))
 
 	if cfg.BasePath == "" {
 		return app

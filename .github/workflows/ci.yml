@@ -150,6 +150,47 @@ jobs:
           echo "$out" | grep -q 'victorialogs.url' \
             || { echo "::error::the error does not name the offending key: $out"; exit 1; }
 
+  alerts:
+    name: Alert rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The released binary rather than `go install`: prometheus/prometheus has
+      # replace directives, which go install refuses.
+      - name: Install promtool
+        run: |
+          ver=3.6.0
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${ver}/prometheus-${ver}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 -C /usr/local/bin "prometheus-${ver}.linux-amd64/promtool"
+          promtool --version
+
+      - name: Check the rules parse
+        run: promtool check rules deploy/alerts/vlui.yml
+
+      # The unit tests are what stop a rule that cannot fire, and the one that
+      # would fire on a user's LogsQL typo.
+      - name: Test the rules
+        working-directory: deploy/alerts
+        run: promtool test rules vlui_test.yml
+
+      # And that the copy the chart renders is the same set of rules, valid on
+      # its own — a PrometheusRule Prometheus rejects takes every OTHER rule in
+      # the file down with it.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.2.3
+      - name: Check the chart's copy
+        run: |
+          helm template t charts/vlui --set prometheusRule.enabled=true \
+            | python3 -c "
+          import yaml,sys
+          for d in yaml.safe_load_all(sys.stdin):
+              if d and d['kind'] == 'PrometheusRule':
+                  yaml.safe_dump(d['spec'], open('from-chart.yml','w'), sort_keys=False)
+          "
+          promtool check rules from-chart.yml
+
   chart:
     name: Helm chart
     runs-on: ubuntu-latest
@@ -261,6 +302,6 @@ jobs:
           check
           check --set config.base_path=/logs
           check --set config.metrics.listen=""
-          check --set 'config.tools[0].tooltip=main' --set 'config.tools[0].icon=gear' \
-                --set 'config.tools[1].tooltip=Yeti' --set 'config.tools[1].icon=yeti' \
+          check --set 'config.tools[0].id=main' --set 'config.tools[0].icon=gear' \
+                --set 'config.tools[1].id=yeti' --set 'config.tools[1].letters=YTI' \
                 --set 'config.tools[1].query=named_tags.system:yeti'

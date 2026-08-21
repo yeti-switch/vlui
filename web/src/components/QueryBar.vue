@@ -160,6 +160,14 @@ function close() {
   active.value = -1
 }
 
+// Clearing leaves the caret in the box: the point of clearing is almost always
+// to type something else.
+function clear() {
+  emit('update:query', '')
+  close()
+  nextTick(() => input.value?.focus())
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (suggestOpen.value) {
     if (e.key === 'ArrowDown') {
@@ -177,11 +185,20 @@ function onKeydown(e: KeyboardEvent) {
       close()
       return
     }
+
     if ((e.key === 'Enter' || e.key === 'Tab') && active.value >= 0) {
       e.preventDefault()
       accept(suggestions.value[active.value]!)
       return
     }
+  }
+
+  // Escape with no suggestions open clears the box — the same key that backs
+  // out of the autocomplete backs out of the query.
+  if (e.key === 'Escape' && props.query !== '') {
+    e.preventDefault()
+    clear()
+    return
   }
 
   // Enter runs; Shift+Enter is a newline, because a long query reads better
@@ -232,6 +249,20 @@ function usePreset(p: Preset) {
           @keydown="onKeydown"
           @blur="close"
         ></textarea>
+
+        <!-- Inside the field, so it clears the part of the query that is the
+             reader's. The tool's prefix beside it is not theirs to clear —
+             switching tool is how that changes. -->
+        <button
+          v-if="query"
+          type="button"
+          class="ghost clear"
+          title="Clear the query (Esc)"
+          aria-label="Clear the query"
+          @click="clear"
+        >
+          ×
+        </button>
 
         <ul v-if="suggestOpen" class="suggest">
           <li
@@ -372,6 +403,21 @@ function usePreset(p: Preset) {
 
 /* The ring belongs to the field, which is what the eye reads as the input. */
 .query:focus { outline: none; }
+
+/* Sits over the right-hand end of the box rather than beside it: taking a
+   column of the line would narrow the query input for the sake of a button
+   that is only there when there is something to clear. */
+.clear {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  z-index: 1;
+  padding: 0 5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.clear:hover { color: var(--text); background: var(--bg-sunken); }
 
 /* Everything else on the line, to the same height. */
 .line > button,

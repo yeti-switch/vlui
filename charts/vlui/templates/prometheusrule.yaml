@@ -1,0 +1,50 @@
+{{- if .Values.prometheusRule.enabled }}
+{{- if not (include "vlui.metricsPort" .) }}
+{{- fail "prometheusRule.enabled is true but config.metrics.listen is empty — the rules are written against metrics this deployment does not export" }}
+{{- end }}
+{{/*
+The rule bodies are NOT written here. They live in alerts/vlui.yml, which is the
+same file the systemd deployments hand to vmalert — one set of rules, whichever
+way vlui is installed, and one place to edit when a metric changes.
+
+.Files.Get can only read files inside the chart, so that file is a copy of
+deploy/alerts/vlui.yml. TestAlertRulesMatchTheChart keeps the two identical.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "vlui.fullname" . }}
+  labels:
+    {{- include "vlui.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.prometheusRule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- $rules := .Files.Get "alerts/vlui.yml" | fromYaml }}
+  groups:
+    {{- range $rules.groups }}
+    - name: {{ .name }}
+      {{- with $.Values.prometheusRule.interval }}
+      interval: {{ . }}
+      {{- end }}
+      rules:
+        {{- range .rules }}
+        - alert: {{ .alert }}
+          expr: {{ .expr | trim | quote }}
+          {{- with .for }}
+          for: {{ . }}
+          {{- end }}
+          labels:
+            {{- toYaml .labels | nindent 12 }}
+            {{- with $.Values.prometheusRule.extraLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            {{- toYaml .annotations | nindent 12 }}
+        {{- end }}
+    {{- end }}
+{{- end }}
