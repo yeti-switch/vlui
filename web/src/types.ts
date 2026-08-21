@@ -20,7 +20,15 @@ export interface Tool {
   query: string
   // The columns this tool opens with, from the config. A default: whatever the
   // reader picks afterwards is remembered in their browser and wins.
-  fields: string[]
+  fields: Field[]
+}
+
+// A column: the log field, and what to call it in the table header. A field
+// name is often far wider than its values, and the header is what sizes the
+// column — the label is how a deployment says "call this one `method`".
+export interface Field {
+  name: string
+  label?: string
 }
 
 export interface User {

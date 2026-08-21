@@ -3,7 +3,12 @@ import { computed, ref } from 'vue'
 import { formatIfInstant, formatStamp, parseLogTime } from '../time'
 import type { LogRow } from '../types'
 
-const props = defineProps<{ row: LogRow }>()
+const props = defineProps<{
+  row: LogRow
+  // Shown next to the real field name, not in place of it: this pane is the
+  // reference for what a row actually contains.
+  labels: Record<string, string>
+}>()
 
 const emit = defineEmits<{
   close: []
@@ -61,7 +66,7 @@ async function copyJSON() {
     <dl>
       <template v-for="f in fields" :key="f">
         <dt class="mono">
-          {{ f }}
+          {{ f }}<span v-if="labels[f]" class="label">· {{ labels[f] }}</span>
           <span class="actions">
             <button type="button" class="ghost" title="Filter to this value" @click="emit('filter', { field: f, value: row[f] ?? '', negate: false })">＝</button>
             <button type="button" class="ghost" title="Exclude this value" @click="emit('filter', { field: f, value: row[f] ?? '', negate: true })">−</button>
@@ -106,6 +111,8 @@ dt {
 }
 
 dt:first-child { margin-top: 0; }
+
+.label { color: var(--text-dim); font-weight: 400; }
 
 .actions { visibility: hidden; display: flex; gap: 2px; }
 dt:hover .actions { visibility: visible; }

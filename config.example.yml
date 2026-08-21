@@ -221,9 +221,26 @@ auth:
 #     icon: yeti
 #     query: 'named_tags.system: yeti'
 #     # Columns this tool opens with. A default only: whatever the reader
-#     # selects afterwards is remembered in their browser and wins. Omit for
-#     # _time and _msg.
+#     # selects afterwards is remembered in their browser and wins, until they
+#     # use "reset columns" in the field panel. Omit for _time and _msg.
 #     fields: [_time, level, host, _msg]
+#
+#   - id: http
+#     letters: WEB
+#     query: 'system: nginx'
+#     # An entry can carry a label, which is what the column HEADER shows. A
+#     # field name is often far wider than its values —
+#     # "payload.response.status_code" is 28 characters of header over three of
+#     # data, and the column is sized to whichever is wider — so a long name
+#     # costs real width for nothing.
+#     #
+#     # Only the header is shortened: the field panel and the log entry show
+#     # the real name with the label beside it, so nothing becomes unfindable.
+#     fields:
+#       - _time
+#       - _msg
+#       - {name: payload.method, label: method}
+#       - {name: payload.response.status_code, label: status}
 #
 #   - id: api
 #     # No tooltip: the id is the label.

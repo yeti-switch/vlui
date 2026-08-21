@@ -6,14 +6,24 @@ const props = defineProps<{
   facets: Facet[]
   loading: boolean
   columns: string[]
+  // Header labels by field name, from the tool's config. Shown ALONGSIDE the
+  // real name here rather than instead of it: this panel is where somebody
+  // comes to find out what a column actually is, and the short name that suits
+  // a header would hide exactly that.
+  labels: Record<string, string>
   tailing: boolean
   open: boolean
+  // Whether this tool's columns have been changed from the configured set. The
+  // reset is offered only then: a button that does nothing is worse than no
+  // button, because it invites the question of what it did.
+  columnsChanged: boolean
 }>()
 
 const emit = defineEmits<{
   filter: [{ field: string; value: string; negate: boolean }]
   'toggle-column': [string]
   'toggle-panel': []
+  'reset-columns': []
 }>()
 
 // Per-field collapse, keyed by name rather than by index, so the open/closed
@@ -84,6 +94,18 @@ watch(
         <button type="button" class="ghost collapse" title="Hide fields" @click="emit('toggle-panel')">◂</button>
         <span>Fields</span>
         <span v-if="loading" class="muted">…</span>
+
+        <!-- Here rather than on the table: this panel is where columns are
+             added and removed, so it is where undoing that belongs. -->
+        <button
+          v-if="columnsChanged"
+          type="button"
+          class="ghost reset"
+          title="Forget the columns chosen here and show the ones this tool is configured with"
+          @click="emit('reset-columns')"
+        >
+          reset columns
+        </button>
       </header>
 
       <div v-if="facets.length" class="find">
@@ -115,6 +137,7 @@ watch(
         <h3 @click="toggle(f.field_name)">
           <span class="caret">{{ isCollapsed(f.field_name) ? '▸' : '▾' }}</span>
           <span class="name mono">{{ f.field_name }}</span>
+          <span v-if="labels[f.field_name]" class="label" :title="`shown in the table as ${labels[f.field_name]}`">{{ labels[f.field_name] }}</span>
           <button
             type="button"
             class="ghost col"
@@ -216,6 +239,17 @@ header {
 
 header .muted { margin-left: auto; }
 
+/* Pushed to the right, and quiet: it is an escape hatch, not a thing to reach
+   for. */
+.reset {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.reset:hover { color: var(--accent); }
+
 .empty { padding: 10px; font-size: 12px; }
 
 /* Sticky under the header, so it stays reachable in a long list — which is the
@@ -252,7 +286,22 @@ h3 {
 }
 
 .caret { width: 10px; color: var(--text-dim); }
-.name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.name { flex: none; overflow: hidden; text-overflow: ellipsis; }
+
+/* The header's short name, beside the real one — so the panel explains the
+   abbreviation the table shows rather than repeating it. */
+.label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+.label::before { content: "· "; }
 
 .col { opacity: 0.4; }
 .col.on { opacity: 1; color: var(--accent); }

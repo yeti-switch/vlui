@@ -33,7 +33,7 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
 - **Timestamps** in the timezone you pick.
 - **Tools** — configurable icons in the left rail, each scoping the session to a
   slice of the logs. Applied server-side.
-- **Shareable state** — query, window, row cap and columns live in the URL.
+- **Shareable state** — the query and time range live in the URL.
 - **OIDC login** — any conformant provider.
 - **Prometheus exporter** — built in, optional, with alerting rules included.
 
@@ -102,6 +102,16 @@ tools:
     icon: yeti
     query: 'named_tags.system: yeti'
     fields: [_time, level, host, _msg]
+
+  - id: http
+    letters: WEB
+    query: 'system: nginx'
+    # A label is what the column header shows; a long field name costs width
+    # for nothing. The field panel and log entry keep the real name.
+    fields:
+      - _time
+      - _msg
+      - {name: payload.response.status_code, label: status}
 
   - id: api
     letters: API              # up to three characters, instead of an icon

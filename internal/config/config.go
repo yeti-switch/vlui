@@ -101,7 +101,21 @@ type Tool struct {
 	//
 	// A default, not a restriction — whatever the operator selects afterwards is
 	// remembered in their browser and wins.
-	Fields []string `yaml:"fields"`
+	//
+	// Each entry is either a field name or a name with a label:
+	//
+	//   fields:
+	//     - _time
+	//     - _msg
+	//     - {name: payload.method, label: method}
+	//
+	// The label is what the column header shows. It exists because a field name
+	// is often far wider than its values — "payload.response.status_code" is
+	// 28 characters of header over three of data, and the column is sized to
+	// whichever is wider. The full name is still shown in the field panel and
+	// the log entry, so nothing is hidden, only shortened where it costs the
+	// most.
+	Fields []Field `yaml:"fields"`
 
 	// AllowedGroups, when set, hides this tool from anyone whose id_token does
 	// not carry one of these in auth.groups_claim, and refuses its filter to
@@ -116,6 +130,50 @@ type Tool struct {
 	// match and a tool carrying this is refused at startup rather than silently
 	// admitting everyone.
 	AllowedGroups []string `yaml:"allowed_groups"`
+}
+
+// Field is one column: the log field to show, and optionally what to call it in
+// the table header.
+type Field struct {
+	Name  string `yaml:"name"`
+	Label string `yaml:"label"`
+}
+
+// UnmarshalYAML accepts either shape:
+//
+//	fields: [_time, _msg]
+//	fields: [{name: payload.method, label: method}]
+//
+// A bare string is by far the common case, and requiring `{name: _time}` for
+// every column to allow a label on one of them would be a poor trade.
+func (f *Field) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		f.Name = node.Value
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: a field is either a name or {name: ..., label: ...}", node.Line)
+	}
+
+	// Checked by hand because Node.Decode does not honour the decoder's
+	// KnownFields setting, and a typo — `lable:` — would otherwise be accepted
+	// and silently do nothing, which is the failure this project refuses
+	// everywhere else.
+	for i := 0; i < len(node.Content); i += 2 {
+		switch key := node.Content[i].Value; key {
+		case "name", "label":
+		default:
+			return fmt.Errorf("line %d: field has no %q setting; want name or label", node.Content[i].Line, key)
+		}
+	}
+
+	type plain Field // a distinct type, or Decode would call this method again
+	var p plain
+	if err := node.Decode(&p); err != nil {
+		return err
+	}
+	*f = Field(p)
+	return nil
 }
 
 type UI struct {
@@ -391,10 +449,12 @@ func (c *Config) validateTools() error {
 				i, t.Tooltip, t.Query)
 		}
 
-		for j, f := range t.Fields {
-			t.Fields[j] = strings.TrimSpace(f)
-			if t.Fields[j] == "" {
-				return fmt.Errorf("tools[%d] (%s): fields[%d] is empty", i, t.Tooltip, j)
+		for j := range t.Fields {
+			f := &t.Fields[j]
+			f.Name = strings.TrimSpace(f.Name)
+			f.Label = strings.TrimSpace(f.Label)
+			if f.Name == "" {
+				return fmt.Errorf("tools[%d] (%s): fields[%d] has no name", i, t.Tooltip, j)
 			}
 		}
 

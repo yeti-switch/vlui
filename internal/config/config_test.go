@@ -317,8 +317,12 @@ tools:
 		t.Errorf("tools[0].fields = %v, want nil", cfg.Tools[0].Fields)
 	}
 	want := []string{"_time", "level", "host", "_msg"}
-	if strings.Join(cfg.Tools[1].Fields, ",") != strings.Join(want, ",") {
-		t.Errorf("tools[1].fields = %v, want %v", cfg.Tools[1].Fields, want)
+	got := make([]string, 0, len(cfg.Tools[1].Fields))
+	for _, f := range cfg.Tools[1].Fields {
+		got = append(got, f.Name)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("tools[1].fields = %v, want %v", got, want)
 	}
 
 	// An empty entry would render as a column with no name and no values.
@@ -379,5 +383,58 @@ func TestToolIconOrLetters(t *testing.T) {
 	// accepted.
 	if _, err := config.Load(write(t, "tools:\n  - id: dc\n    letters: ЦОД\n")); err != nil {
 		t.Errorf("three multi-byte letters were refused: %v", err)
+	}
+}
+
+// A field is either a name or a name with a label. Both shapes in one list,
+// because requiring {name: _time} for every column to label one of them would
+// be a poor trade.
+func TestToolFieldLabels(t *testing.T) {
+	cfg, err := config.Load(write(t, `
+tools:
+  - id: http
+    icon: globe
+    fields:
+      - _time
+      - _msg
+      - {name: payload.method, label: method}
+      - name: payload.response.status_code
+        label: status
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []config.Field{
+		{Name: "_time"},
+		{Name: "_msg"},
+		{Name: "payload.method", Label: "method"},
+		{Name: "payload.response.status_code", Label: "status"},
+	}
+	for i, w := range want {
+		if cfg.Tools[0].Fields[i] != w {
+			t.Errorf("fields[%d] = %+v, want %+v", i, cfg.Tools[0].Fields[i], w)
+		}
+	}
+}
+
+func TestToolFieldValidation(t *testing.T) {
+	cases := map[string]string{
+		// A typo in a key is otherwise a silent no-op: the label simply never
+		// appears and nothing says why.
+		"tools:\n  - id: x\n    icon: gear\n    fields:\n      - {name: a, lable: b}\n": "want name or label",
+		"tools:\n  - id: x\n    icon: gear\n    fields:\n      - {label: nameless}\n":   "has no name",
+		"tools:\n  - id: x\n    icon: gear\n    fields:\n      - [a, b]\n":              "either a name or",
+	}
+	for body, want := range cases {
+		t.Run(want, func(t *testing.T) {
+			_, err := config.Load(write(t, body))
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to mention %q", err, want)
+			}
+		})
 	}
 }

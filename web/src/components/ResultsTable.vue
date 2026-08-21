@@ -6,6 +6,10 @@ import type { LogRow } from '../types'
 const props = defineProps<{
   rows: LogRow[]
   columns: string[]
+  // Header labels by field name. A field name is often far wider than its
+  // values — "payload.response.status_code" over "200" — and the header is what
+  // sizes the column, so a deployment can name it something shorter.
+  labels: Record<string, string>
   selectedIndex: number
   running: boolean
 }>()
@@ -109,7 +113,7 @@ const columnWidths = computed<number[]>(() => {
     // The header is its own constraint, and a different font: smaller, and not
     // monospace, so its name is measured generously rather than exactly.
     const removable = column !== '_time' && column !== '_msg'
-    const header = column.length * charWidth.value + CELL_PADDING + (removable ? DROP_BUTTON : 0)
+    const header = headerLabel(column).length * charWidth.value + CELL_PADDING + (removable ? DROP_BUTTON : 0)
 
     const max = column === '_msg' ? MAX_MSG : MAX_COLUMN
     return Math.round(Math.min(Math.max(content, header, MIN_COLUMN), max))
@@ -144,6 +148,17 @@ function cell(row: LogRow, column: string): string {
 
 // The hover title, which is where the untouched value lives once a cell has
 // been reformatted — nothing is hidden, it is one hover away.
+// What the header shows, and what it says on hover: the label when there is
+// one, with the real field name a mouse away so nothing is unfindable.
+function headerLabel(column: string): string {
+  return props.labels[column] ?? column
+}
+
+function headerTitle(column: string): string {
+  const label = props.labels[column]
+  return label ? `${column} (shown as ${label})` : column
+}
+
 function cellTitle(row: LogRow, column: string): string {
   const raw = row[column]
   if (raw === undefined) return ''
@@ -168,8 +183,8 @@ function mounted(el: Element | null) {
 <template>
   <div class="results" :ref="(el) => mounted(el as Element | null)" @scroll.passive="onScroll">
     <div class="head" :style="{ gridTemplateColumns: gridTemplate }">
-      <div v-for="c in columns" :key="c" class="hcell mono">
-        <span class="hname">{{ c }}</span>
+      <div v-for="c in columns" :key="c" class="hcell mono" :title="headerTitle(c)">
+        <span class="hname">{{ headerLabel(c) }}</span>
         <button
           v-if="c !== '_time' && c !== '_msg'"
           type="button"

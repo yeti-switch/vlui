@@ -41,8 +41,10 @@ const DEFAULT_COLUMNS = ['_time', '_msg']
  * column set on every visit is the sort of small tax that makes people stop
  * using the columns at all.
  *
- * Three sources, in order — a link's ?cols= wins, then what this browser
- * remembers for the tool, then the tool's `fields` from the config. */
+ * Two sources: what this browser remembers for the tool, then the tool's
+ * `fields` from the config. Deliberately not the URL — the columns are a
+ * property of the person reading, not of what is being read, and a shared link
+ * that changed the recipient's layout would be a surprise every time. */
 const COLUMNS_KEY = 'vlui.columns'
 
 function storedColumns(): Record<string, string[]> {
@@ -66,7 +68,18 @@ function storedColumns(): Record<string, string[]> {
 const columnsByTool = ref<Record<string, string[]>>(storedColumns())
 
 function rememberColumns() {
-  columnsByTool.value[activeTool.value] = columns.value
+  // Only what differs from the tool's own default is stored. Storing the
+  // default too would mean every tool ever visited has an entry, and "reset"
+  // would have nothing to tell apart from "never touched".
+  if (columns.value.join(',') === defaultColumnsFor(activeTool.value).join(',')) {
+    delete columnsByTool.value[activeTool.value]
+  } else {
+    columnsByTool.value[activeTool.value] = columns.value
+  }
+  persistColumns()
+}
+
+function persistColumns() {
   try {
     window.localStorage.setItem(COLUMNS_KEY, JSON.stringify(columnsByTool.value))
   } catch {
@@ -75,17 +88,46 @@ function rememberColumns() {
   }
 }
 
+// Whether this tool's columns have been changed from what the config says.
+const columnsChanged = computed(() => Boolean(columnsByTool.value[activeTool.value]))
+
+// Forget them, and go back to the configured set.
+function resetColumns() {
+  delete columnsByTool.value[activeTool.value]
+  persistColumns()
+  columns.value = defaultColumnsFor(activeTool.value)
+}
+
 // What a tool's columns should be when it is selected: this browser's memory
 // first, then the config's defaults, then _time and _msg.
 function columnsFor(id: string): string[] {
   const remembered = columnsByTool.value[id]
   if (remembered?.length) return [...remembered]
+  return defaultColumnsFor(id)
+}
 
+// What the deployment says this tool should show, before anyone changed it.
+function defaultColumnsFor(id: string): string[] {
   const configured = toolById(id)?.fields
-  if (configured?.length) return [...configured]
-
+  if (configured?.length) return configured.map((f) => f.name)
   return [...DEFAULT_COLUMNS]
 }
+
+/* What a column is called in the table header, when the config gives it a
+   short name. Keyed by field name and taken from the ACTIVE tool: the same
+   field can be worth different labels under different tools, and a label from
+   the tool you are not looking at would be a lie.
+   
+   Only the header uses it. The field panel and the log entry show the real
+   name — that is where somebody goes to find out what a column actually is,
+   and a short label there would hide the one thing they came for. */
+const labels = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {}
+  for (const f of tool.value?.fields ?? []) {
+    if (f.label) out[f.name] = f.label
+  }
+  return out
+})
 
 /* One query box per tool, remembered as you switch between them.
    
@@ -355,7 +397,6 @@ function toggleColumn(field: string) {
     columns.value = [...columns.value, field]
   }
   rememberColumns()
-  writeHash()
 }
 
 // Switching tool changes what every panel is looking at, so it re-runs rather
@@ -409,7 +450,6 @@ function writeHash() {
     p.set('start', String(range.value.startMs))
     p.set('end', String(range.value.endMs))
   }
-  if (columns.value.join(',') !== DEFAULT_COLUMNS.join(',')) p.set('cols', columns.value.join(','))
   history.replaceState(null, '', `#${p.toString()}`)
 }
 
@@ -424,7 +464,6 @@ function readHash(): boolean {
   const l = Number(p.get('limit'))
   if (Number.isFinite(l) && l > 0) limit.value = l
 
-  const cols = p.get('cols')
 
   // Only a tool this deployment actually offers, and only one this account was
   // offered: a stale or invented id in a shared link falls back to the default
@@ -438,11 +477,11 @@ function readHash(): boolean {
   }
   if (q && activeTool.value) queriesByTool.value[activeTool.value] = q
 
-  // Columns come last, once the tool is known: a link's ?cols= is what the
-  // sender was looking at and outranks both this browser's memory and the
-  // config, but without one the tool decides.
-  const linkedColumns = cols ? cols.split(',').filter(Boolean) : []
-  columns.value = linkedColumns.length ? linkedColumns : columnsFor(activeTool.value)
+  // Columns come last, once the tool is known. They are NOT in the URL: they
+  // are a preference of the person reading, not a property of what is being
+  // read, and a link that carried them would impose the sender's column set on
+  // whoever opened it — including columns their tool does not have.
+  columns.value = columnsFor(activeTool.value)
 
   const start = Number(p.get('start'))
   const end = Number(p.get('end'))
@@ -614,17 +653,21 @@ onUnmounted(() => {
             :facets="facets"
             :loading="facetsLoading"
             :columns="columns"
+            :labels="labels"
             :tailing="tailing"
             :open="facetsOpen"
+            :columns-changed="columnsChanged"
             @filter="addFilter"
             @toggle-column="toggleColumn"
             @toggle-panel="toggleFacets"
+            @reset-columns="resetColumns"
           />
 
           <div class="main">
             <ResultsTable
               :rows="rows"
               :columns="columns"
+              :labels="labels"
               :selected-index="selectedIndex"
               :running="running"
               @select="selectedIndex = $event === selectedIndex ? -1 : $event"
@@ -636,6 +679,7 @@ onUnmounted(() => {
           <RowDetail
             v-if="selectedRow"
             :row="selectedRow"
+            :labels="labels"
             @close="selectedIndex = -1"
             @filter="addFilter"
             @toggle-column="toggleColumn"

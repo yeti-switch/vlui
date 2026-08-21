@@ -99,13 +99,19 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Query string `json:"query"`
 	}
 
+	type fieldJSON struct {
+		Name string `json:"name"`
+		// Empty means the header shows the name.
+		Label string `json:"label,omitempty"`
+	}
+
 	type toolJSON struct {
-		ID      string   `json:"id"`
-		Tooltip string   `json:"tooltip"`
-		Icon    string   `json:"icon"`
-		Letters string   `json:"letters"`
-		Query   string   `json:"query"`
-		Fields  []string `json:"fields"`
+		ID      string      `json:"id"`
+		Tooltip string      `json:"tooltip"`
+		Icon    string      `json:"icon"`
+		Letters string      `json:"letters"`
+		Query   string      `json:"query"`
+		Fields  []fieldJSON `json:"fields"`
 	}
 
 	out := struct {
@@ -149,9 +155,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if !s.permitted(r, t) {
 			continue
 		}
+		fields := make([]fieldJSON, 0, len(t.Fields))
+		for _, f := range t.Fields {
+			fields = append(fields, fieldJSON{Name: f.Name, Label: f.Label})
+		}
 		out.Tools = append(out.Tools, toolJSON{
 			ID: t.ID, Tooltip: t.Tooltip, Icon: t.Icon, Letters: t.Letters,
-			Query: t.Query, Fields: t.Fields,
+			Query: t.Query, Fields: fields,
 		})
 	}
 
