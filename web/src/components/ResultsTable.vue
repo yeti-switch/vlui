@@ -59,7 +59,11 @@ const visible = computed(() => props.rows.slice(start.value, start.value + count
  *
  * The cell font is monospace, so a character count converts exactly to pixels
  * once one character has been measured. */
-const MIN_COLUMN = 70
+// A floor, not a target. Low enough that a three-letter field — "pop" holding
+// "fra" — is a three-letter column: it needs 22px of text and 16 of padding,
+// and anything wider is space taken from _msg for nothing. High enough that a
+// one-character column still reads as a column.
+const MIN_COLUMN = 44
 const MAX_COLUMN = 400
 // _msg is the log line and deserves more room, but not an unbounded amount: one
 // stack trace should not push every other column off a 4000px scroll.
@@ -70,16 +74,6 @@ const CELL_PADDING = 18 // .cell's 8px either side, plus a little air
 // every streamed batch would be real work, and the widest value in the first
 // few hundred is what the reader is looking at anyway.
 const WIDTH_SAMPLE = 300
-
-// The header's remove button sits beside the name and takes its width even
-// while it is invisible, so the name has to be given room for it or a short
-// column like "level" shows as "lev…" over values that fit perfectly.
-//
-// The button, the flex gap beside it, and a couple of pixels of slack: the name
-// is set in the sans body font while these widths are computed from the
-// monospace cell font, so the estimate has to err wide. It was one pixel short
-// before, which is all an ellipsis needs.
-const DROP_BUTTON = 28
 
 const charWidth = ref(7.2) // replaced by a real measurement on mount
 
@@ -112,8 +106,12 @@ const columnWidths = computed<number[]>(() => {
 
     // The header is its own constraint, and a different font: smaller, and not
     // monospace, so its name is measured generously rather than exactly.
-    const removable = column !== '_time' && column !== '_msg'
-    const header = headerLabel(column).length * charWidth.value + CELL_PADDING + (removable ? DROP_BUTTON : 0)
+    //
+    // No allowance for the remove button. It is invisible until the header is
+    // hovered, and reserving 28px in every column for a control nobody is
+    // looking at cost more width than the values did — on a short column it was
+    // most of the column. It overlays the name on hover instead.
+    const header = headerLabel(column).length * charWidth.value + CELL_PADDING
 
     const max = column === '_msg' ? MAX_MSG : MAX_COLUMN
     return Math.round(Math.min(Math.max(content, header, MIN_COLUMN), max))
@@ -247,15 +245,29 @@ function mounted(el: Element | null) {
 }
 
 .hcell {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 4px;
   padding: 0 8px;
   overflow: hidden;
 }
 
 .hname { overflow: hidden; text-overflow: ellipsis; }
-.drop { visibility: hidden; }
+
+/* Over the name rather than beside it. Beside it, every column reserved space
+   for a button that is hidden until you hover the header — which on a narrow
+   column was wider than the values. Its own background so it stays legible
+   over whatever it covers. */
+.drop {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  bottom: 0;
+  visibility: hidden;
+  padding: 0 4px;
+  background: var(--bg-sunken);
+}
+
 .hcell:hover .drop { visibility: visible; }
 
 .canvas { position: relative; min-width: fit-content; }
