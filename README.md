@@ -29,7 +29,8 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
 - **Hits histogram** — matches over the window. Drag to zoom.
 - **Field sidebar** — the most frequent values per field, searchable by field
   name, one click to filter.
-- **Live tailing** — follow new logs as they arrive.
+- **Live tailing** — follow new logs as they arrive, opening with the window and
+  row cap already on screen.
 - **Timestamps** in the timezone you pick.
 - **Tools** — configurable icons in the left rail, each scoping the session to a
   slice of the logs. Applied server-side.

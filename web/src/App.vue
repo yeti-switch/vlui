@@ -367,7 +367,15 @@ function toggleTail() {
   tailing.value = true
   writeURL()
 
-  tailSource = openTail(query.value, activeTool.value, {
+  /* The window the picker is showing, as how much history to open with.
+     
+     Only a relative one: "the last hour" means something to a stream that has
+     no end, and "yesterday 10:00 to 11:00" does not — a tail follows now, so an
+     absolute window falls back to the server's own default backfill rather than
+     pretending to honour something it cannot. */
+  const backfillSeconds = range.value.kind === 'relative' ? range.value.seconds : undefined
+
+  tailSource = openTail(query.value, activeTool.value, { limit: limit.value, backfillSeconds }, {
     onRow: (row) => {
       tailBuffer.push(row)
     },
@@ -383,7 +391,10 @@ function toggleTail() {
 function flushTail() {
   if (!tailBuffer.length) return
 
-  const cap = cfg.value?.max_rows ?? 5000
+  // The reader's own row cap, not the deployment's ceiling: the box says how
+  // many rows they want on screen, and a tail is no more entitled to ignore it
+  // than a query is. The ceiling still applies, in case the box says more.
+  const cap = Math.min(limit.value, cfg.value?.max_rows ?? 5000)
   // Newest first, matching a finished query, and bounded the same way: a tail
   // left running for a day must not grow the tab until it dies.
   const next = [...tailBuffer.reverse(), ...rows.value].slice(0, cap)
@@ -788,6 +799,7 @@ onUnmounted(() => {
               :styles="columnStyles"
               :selected-index="selectedIndex"
               :running="running"
+              :tailing="tailing"
               @select="selectedIndex = $event === selectedIndex ? -1 : $event"
               @remove-column="toggleColumn"
             />

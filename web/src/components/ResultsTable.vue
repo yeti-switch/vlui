@@ -16,6 +16,10 @@ const props = defineProps<{
   styles: Record<string, ValueStyle>
   selectedIndex: number
   running: boolean
+  // Following. Distinct from `running`: a tail is not waiting for an answer, it
+  // is waiting for something to happen — but an empty pane looks the same
+  // either way, and "No logs matched" is the one thing it does NOT mean.
+  tailing: boolean
 }>()
 
 const emit = defineEmits<{
@@ -379,8 +383,14 @@ function mounted(el: Element | null) {
       </div>
     </div>
 
-    <p v-if="!rows.length && !running" class="empty muted">No logs matched.</p>
-    <p v-else-if="!rows.length" class="empty muted">Querying…</p>
+    <!-- Three states, and only one of them is "there is nothing here". A query
+         in flight and a tail waiting for its first line both spin: the pane is
+         going to fill, and saying otherwise for a second and a half reads as an
+         answer rather than as a wait. -->
+    <p v-if="rows.length" class="none"></p>
+    <p v-else-if="running" class="empty muted"><span class="spinner"></span>Querying…</p>
+    <p v-else-if="tailing" class="empty muted"><span class="spinner"></span>Following…</p>
+    <p v-else class="empty muted">No logs matched.</p>
   </div>
 </template>
 
@@ -475,5 +485,39 @@ function mounted(el: Element | null) {
   vertical-align: 1px;
 }
 
-.empty { padding: 16px; }
+.none { display: none; }
+
+.empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+}
+
+/* A ring rather than a bouncing dot or a bar: it is the one shape that says
+   "working" without implying progress towards a known end, which is exactly
+   what a query and a tail both are. */
+.spinner {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border: 2px solid color-mix(in srgb, var(--text-dim) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Still turning, because a stopped spinner beside "Following…" reads as a hang
+   — just slowly enough not to be motion anybody objected to. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
 </style>

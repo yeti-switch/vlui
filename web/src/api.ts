@@ -187,8 +187,24 @@ export interface TailHandlers {
 
 // openTail follows new logs over Server-Sent Events. EventSource reconnects by
 // itself, which is what makes the server's tail ceiling invisible to the user.
-export function openTail(query: string, tool: string, handlers: TailHandlers): EventSource {
-  const es = new EventSource(apiURL('tail', { query, ...toolParam(tool) }), { withCredentials: true })
+//
+// The row cap and the window travel with it, so a tail obeys the same two
+// settings a query does: `limit` is how many rows the pane holds, and
+// `start_offset` is how much history the tail opens with — the server trims the
+// backfill to the cap rather than sending an hour of a busy stream for the
+// browser to throw away.
+export function openTail(
+  query: string,
+  tool: string,
+  opts: { limit: number; backfillSeconds?: number },
+  handlers: TailHandlers,
+): EventSource {
+  const params: Record<string, string> = { query, ...toolParam(tool), limit: String(opts.limit) }
+  if (opts.backfillSeconds && opts.backfillSeconds > 0) {
+    params.start_offset = `${Math.round(opts.backfillSeconds)}s`
+  }
+
+  const es = new EventSource(apiURL('tail', params), { withCredentials: true })
 
   es.onmessage = (ev) => {
     try {
