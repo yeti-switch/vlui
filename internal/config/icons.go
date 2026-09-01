@@ -20,4 +20,10 @@ var Icons = []string{
 	"server",
 	"tag",
 	"terminal",
+	"window",
+	"exchange",
+	"paw",
+	"clock",
+	"cycle",
+	"alert",
 }

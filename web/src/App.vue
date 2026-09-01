@@ -9,6 +9,7 @@ import QueryBar from './components/QueryBar.vue'
 import ResultsTable from './components/ResultsTable.vue'
 import RowDetail from './components/RowDetail.vue'
 import LoginGate from './components/LoginGate.vue'
+import IconsPage from './components/IconsPage.vue'
 import SideRail from './components/SideRail.vue'
 import { markSignedOut, signedOut } from './session'
 
@@ -518,6 +519,20 @@ function toolFromPath(): string {
   return rest.split('/')[0] ?? ''
 }
 
+/* The one path that is not a tool: /icons, the reference sheet of every name
+ * `icon:` accepts.
+ *
+ * Behind the same session as everything else — the boot fetches the config
+ * first and a 401 raises the login gate over this page too — but not behind a
+ * working VictoriaLogs, which is the part that matters: somebody editing tool
+ * config is often doing it because the deployment is not otherwise happy.
+ *
+ * `icons` is refused as a tool id at startup, so this can never shadow a real
+ * tool.
+ */
+const ICONS_PATH = 'icons'
+const showIcons = computed(() => toolFromPath() === ICONS_PATH)
+
 function writeURL() {
   const p = new URLSearchParams()
   p.set('q', query.value)
@@ -648,6 +663,11 @@ onMounted(async () => {
     return
   }
 
+  // The icons sheet is a page of this app, not a page of the logs: it needs the
+  // same session everything else does — which the fetch above has just proved —
+  // and nothing after this point, since there is no query on it to run.
+  if (showIcons.value) return
+
   /* And then it runs, whether or not the URL carried a query.
    *
    * There is always something to run by this point: the tool's own filter, or
@@ -672,7 +692,12 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <!-- The gate comes first, and the sheet waits on cfg: both mean the same
+       thing, that the server has said who this is. A page listing what a
+       deployment can be configured with is not for whoever finds the URL. -->
   <LoginGate v-if="signedOut" />
+
+  <IconsPage v-else-if="showIcons && cfg" />
 
   <div v-else class="app">
     <SideRail

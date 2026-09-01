@@ -353,6 +353,8 @@ function usePreset(p: Preset) {
 .prefix {
   flex: none;
   max-width: 40%;
+  /* The same vertical metrics as .query below: the filter and what you type
+     have to sit on one baseline, or the box reads as two boxes. */
   padding: 6px 8px 4px;
   overflow: hidden;
   color: var(--text-dim);
@@ -376,23 +378,40 @@ function usePreset(p: Preset) {
   width: 100%;
   /* Explicit height rather than rows="1": a textarea sizes itself from its
      font, which is monospace here and taller than the sans-serif in the
-     buttons. The padding and line-height below add up to exactly --control-h.
-     Dragging the resize handle overrides it, which is the point of the handle. */
-  height: var(--control-h);
-  min-height: var(--control-h);
+     buttons.
+     
+     --control-h LESS THE FIELD'S BORDER, because it is the field that has to
+     come out one control-height: the border is drawn on .field, so a textarea
+     of the full height makes the box 2px taller than every button beside it and
+     the line sits 2px low. The padding and line-height below add up to this
+     same number. */
+  height: calc(var(--control-h) - 2px);
+  min-height: calc(var(--control-h) - 2px);
   max-height: 40vh;
   flex: 1;
   min-width: 0;
   resize: none;
-  /* 6/4 rather than 5/5, and the extra pixel at the top is deliberate. A line
-     box centres the font's em square, not the part of it that carries ink: this
-     monospace reserves more room above the baseline than below, so evenly split
-     padding leaves the text sitting 1px high in the box. Measured — the ink
-     band is 10.83px from both edges at 6/4, against 9.83/11.83 at 5/5. The two
-     still total 10px, which is what keeps the box at --control-h.
-
-     Note this correction is per font: the row-cap input beside this one is
-     13px sans and is already centred at an even 5/5, so it is left alone. */
+  /* 6 + an 18px line + 4 = 28, which with .field's border is one control
+     height.
+     
+     Uneven, and it has to be, because the alignment that matters is ACROSS the
+     line rather than inside this box. Every control here centres its own line
+     box, but a font's glyphs do not sit in the same place inside it: this
+     monospace at 12px rides higher than the 13px sans in the row-cap box
+     beside it. Measured at 8x, "500" in both boxes against the shared 7..37
+     band:
+     
+       padding   query digits   row-cap digits   caret
+       5/5       21.00          22.25            22.00
+       6/4       22.00          22.25            23.00
+     
+     So the even split is the one that centres the CARET, and the uneven one is
+     the one that puts the TEXT on the same line as its neighbours. Text wins:
+     it is what the eye tracks along the bar, and the caret is one blinking
+     pixel column inside a box whose own edges are already aligned.
+     
+     Per font, not per box — the row cap is 13px sans and is centred at an even
+     5/5, so it is left alone. */
   padding: 6px 8px 4px;
   line-height: 18px;
   white-space: pre-wrap;
@@ -409,7 +428,10 @@ function usePreset(p: Preset) {
    that is only there when there is something to clear. */
 .clear {
   position: absolute;
-  top: 3px;
+  /* Centred on the FIRST line of the field — 4px below its border — rather than
+     on the field, which grows downwards when a query runs to several lines
+     while this stays with the line it clears. */
+  top: 4px;
   right: 4px;
   z-index: 1;
   padding: 0 5px;

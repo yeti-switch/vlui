@@ -558,7 +558,8 @@ func (c *Config) validateTools() error {
 			return fmt.Errorf("tools[%d]: id %q contains %q; use letters, digits, dashes and underscores", i, t.ID, bad)
 		}
 		if reservedIDs[t.ID] {
-			return fmt.Errorf("tools[%d]: id %q is a path this server already answers on, so /%s would never reach the UI; pick another id", i, t.ID, t.ID)
+			return fmt.Errorf("tools[%d]: id %q is one of the paths this app answers itself (%s), so /%s would never select the tool; pick another id",
+				i, t.ID, strings.Join(reservedNames(), ", "), t.ID)
 		}
 		if first, dup := seen[t.ID]; dup {
 			return fmt.Errorf("tools[%d] and tools[%d]: both use the id %q, which has to be unique — it is how a request names one tool rather than the other",
@@ -583,7 +584,7 @@ func (c *Config) validateTools() error {
 			return fmt.Errorf("tools[%d] (%s): icon %q and letters %q are both set; a tool has one or the other",
 				i, t.Tooltip, t.Icon, t.Letters)
 		case t.Icon != "" && !slices.Contains(Icons, t.Icon):
-			return fmt.Errorf("tools[%d] (%s): unknown icon %q; available: %s",
+			return fmt.Errorf("tools[%d] (%s): unknown icon %q; available: %s (the UI draws them all at /icons)",
 				i, t.Tooltip, t.Icon, strings.Join(Icons, ", "))
 		case t.Letters != "":
 			// Counted in runes: "ЦОД" is three letters and six bytes, and
@@ -631,18 +632,20 @@ func (c *Config) validateTools() error {
 }
 
 // reservedIDs are the ids a tool may not take, because the URL the UI would
-// give it is already answered by something else.
+// give it already means something else.
 //
 // The tool is a path segment under the mount point — /http is the http tool —
-// and the router reaches for its own routes first: /api is the API, /healthz is
-// the health check, and /assets is where the built JavaScript lives. A tool
-// named for one of those would be a link that silently returns JSON, or a
-// script, instead of the UI. Refused at startup, where the operator is looking,
-// rather than discovered by whoever clicks the icon.
+// and something answers those paths first: /api is the API, /healthz is the
+// health check, /assets is where the built JavaScript lives, and /icons is the
+// sheet of every icon name this config accepts. A tool named for one of those
+// would be a link that returns JSON, or a script, or somebody else's page.
+// Refused at startup, where the operator is looking, rather than discovered by
+// whoever clicks the icon.
 var reservedIDs = map[string]bool{
 	"api":     true,
 	"healthz": true,
 	"assets":  true,
+	"icons":   true,
 }
 
 /* validateValueStyles checks every rule of every style, fills in the default
@@ -779,6 +782,16 @@ func orNone(names []string) string {
 		return "none are defined"
 	}
 	return strings.Join(names, ", ")
+}
+
+// reservedNames lists them, sorted, for that error.
+func reservedNames() []string {
+	names := make([]string, 0, len(reservedIDs))
+	for name := range reservedIDs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // firstBadIDRune reports the first character an id may not contain, or zero.

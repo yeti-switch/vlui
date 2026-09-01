@@ -204,7 +204,9 @@ auth:
 #          silently.
 # tooltip: the label shown on hover. Defaults to the id.
 # icon:    one of gear, yeti, bolt, bug, chart, cloud, database, globe, lock,
-#          phone, server, tag, terminal. An unknown name fails at startup.
+#          phone, server, tag, terminal, window, exchange, paw, clock, cycle,
+#          alert. An unknown name fails at startup. The running UI draws all of
+#          them, with their names, at /icons.
 # letters: up to three characters drawn in place of an icon — "API", "SIP",
 #          "DB". Past three or four tools the abstract shapes stop being
 #          distinguishable from each other, while three letters of the system's

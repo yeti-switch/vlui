@@ -223,9 +223,11 @@ func TestToolIDs(t *testing.T) {
 		// The id is a path segment now, so it cannot be one the server answers
 		// on itself: /api is the API and /healthz is the health check, and a
 		// tool living there would be a link that returns anything but the UI.
-		"tools:\n  - id: api\n    icon: gear\n":     `id "api" is a path this server already answers on`,
-		"tools:\n  - id: healthz\n    icon: gear\n": `id "healthz" is a path this server already answers on`,
-		"tools:\n  - id: assets\n    icon: gear\n":  `id "assets" is a path this server already answers on`,
+		"tools:\n  - id: api\n    icon: gear\n":     `id "api" is one of the paths this app answers itself`,
+		"tools:\n  - id: healthz\n    icon: gear\n": `id "healthz" is one of the paths this app answers itself`,
+		"tools:\n  - id: assets\n    icon: gear\n":  `id "assets" is one of the paths this app answers itself`,
+		// /icons is the sheet of every icon name this config accepts.
+		"tools:\n  - id: icons\n    icon: gear\n": `id "icons" is one of the paths this app answers itself`,
 	}
 	for body, want := range cases {
 		t.Run(want, func(t *testing.T) {
