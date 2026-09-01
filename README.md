@@ -179,7 +179,12 @@ of the config and refuses a bad one — unknown colour or type, backwards range,
 Each tool carries either an `icon` or up to three `letters` — past a handful of
 tools the abstract shapes stop being distinguishable, while `API` needs no
 legend. Icons: `gear`, `yeti`, `bolt`, `bug`, `chart`, `cloud`, `database`,
-`globe`, `lock`, `phone`, `server`, `tag`, `terminal`.
+`globe`, `lock`, `phone`, `server`, `tag`, `terminal`, `window`, `exchange`,
+`paw`, `clock`, `cycle`, `alert`.
+
+The UI draws every icon with its name at **`/icons`** — unlinked, behind the same
+login as the rest of the app, and served whether or not VictoriaLogs is up, since
+editing tool config is often what one does when it is not.
 
 The filter is applied by the **server**, from the tool's id, as VictoriaLogs
 `extra_filters` — never composed in the browser, and a request naming no tool

@@ -34,6 +34,31 @@ export const ICONS: Record<string, string> = {
   tag: `<path d="M3.5 11.5V4.5a1 1 0 0 1 1-1h7l9 9-8 8-9-9Z" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.4"/>`,
 
   terminal: `<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7.5 9.5 3 2.5-3 2.5M13 15h4" stroke-linecap="round" stroke-linejoin="round"/>`,
+
+  // --- a shape per kind of log a deployment tends to separate ---------------
+
+  // Web traffic. A browser window rather than a globe, which reads as "the
+  // internet" rather than "requests this app served".
+  window: `<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 9.5h18"/><path d="M6.3 7h.01M8.9 7h.01" stroke-linecap="round"/>`,
+
+  // A request and its response, for an access log seen as an exchange rather
+  // than as a page.
+  exchange: `<path d="M3.5 9.5h14l-3.2-3.2M20.5 14.5h-14l3.2 3.2" stroke-linecap="round" stroke-linejoin="round"/>`,
+
+  // A big cat's paw: the puma serving the requests, for a deployment that
+  // names its tools after what runs them.
+  paw: `<path d="M12 13c2.7 0 4.8 2 4.8 4 0 1.6-1.3 2.7-3 2.7-1 0-1.3-.3-1.8-.3s-.8.3-1.8.3c-1.7 0-3-1.1-3-2.7 0-2 2.1-4 4.8-4Z" stroke-linejoin="round"/><ellipse cx="5.6" cy="11.2" rx="2" ry="2.5"/><ellipse cx="18.4" cy="11.2" rx="2" ry="2.5"/><ellipse cx="9.5" cy="6.2" rx="1.9" ry="2.4"/><ellipse cx="14.5" cy="6.2" rx="1.9" ry="2.4"/>`,
+
+  // Anything that runs because the clock said so.
+  clock: `<circle cx="12" cy="12" r="9"/><path d="M12 6.8V12l3.4 2" stroke-linecap="round" stroke-linejoin="round"/>`,
+
+  // Work that happens off to one side and comes round again: background jobs,
+  // retries, queues drained by a worker.
+  cycle: `<path d="M20.5 5.5v4.6h-4.6M3.5 18.5v-4.6h4.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.6 10.1a7.8 7.8 0 0 1 13-3l3 3M3.4 13.9l3 3a7.8 7.8 0 0 0 13-3" stroke-linecap="round" stroke-linejoin="round"/>`,
+
+  // What went wrong. The one shape in the set that should be unmistakable at a
+  // glance, because it is the tool somebody reaches for in a hurry.
+  alert: `<path d="M12 3.6 2.6 19.6h18.8L12 3.6Z" stroke-linejoin="round"/><path d="M12 9.4v4.4" stroke-linecap="round"/><path d="M12 16.9h.01" stroke-linecap="round"/>`,
 }
 
 // A name the Go side accepted but this map somehow lacks would render an empty
