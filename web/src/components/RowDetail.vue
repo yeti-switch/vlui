@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { formatIfInstant, formatStamp, parseLogTime } from '../time'
-import type { LogRow } from '../types'
+import { valueRule } from '../valuestyle'
+import type { LogRow, ValueStyle } from '../types'
 
 const props = defineProps<{
   row: LogRow
   // Shown next to the real field name, not in place of it: this pane is the
   // reference for what a row actually contains.
   labels: Record<string, string>
+  // The same value styles the table uses, so a 500 is red in both. No cache
+  // here: this pane draws one row, once.
+  styles: Record<string, ValueStyle>
 }>()
 
 const emit = defineEmits<{
@@ -38,6 +42,17 @@ function display(field: string): string {
   // actually stored, so the raw value is never replaced, only accompanied.
   const zoned = formatIfInstant(raw)
   return zoned ? `${zoned}  (${raw})` : raw
+}
+
+// The colour for a field's RAW value. display() may add the original in
+// parentheses beside a reformatted timestamp, and a rule is written against
+// what was logged rather than against how this pane shows it.
+function rule(field: string) {
+  return valueRule(props.row[field] ?? '', props.styles[field]?.rules)
+}
+
+function pill(field: string): boolean {
+  return props.styles[field]?.type !== 'text'
 }
 
 const copied = ref(false)
@@ -73,7 +88,18 @@ async function copyJSON() {
             <button type="button" class="ghost" title="Show as a column" @click="emit('toggle-column', f)">▦</button>
           </span>
         </dt>
-        <dd class="mono">{{ display(f) }}</dd>
+        <dd class="mono">
+          <!-- The description on hover here too: this pane is where somebody
+               goes to find out what a row actually says, and a red value with
+               no explanation is the question they came with. -->
+          <span
+            v-if="rule(f)"
+            :class="[pill(f) ? 'tag' : 'tint', `v-${rule(f)?.color}`]"
+            :title="rule(f)?.description"
+            >{{ display(f) }}</span
+          >
+          <template v-else>{{ display(f) }}</template>
+        </dd>
       </template>
     </dl>
   </aside>

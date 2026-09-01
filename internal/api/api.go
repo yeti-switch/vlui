@@ -103,6 +103,35 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 		// Empty means the header shows the name.
 		Label string `json:"label,omitempty"`
+		// Names one of the value_styles below, which decides how this column's
+		// values are drawn. Empty means plain text.
+		Style string `json:"style,omitempty"`
+	}
+
+	// One rule of a value style, as the browser needs it: the range already
+	// parsed into numbers, because the server has validated it and doing it
+	// twice is how the two ends come to disagree about what "200-399" means.
+	// Either end may be open — "1000-" is a threshold, not a band — so both are
+	// pointers: an absent bound is absent, not zero. (It also keeps infinities
+	// out of the JSON, which cannot carry them.)
+	type rangeJSON struct {
+		Lo *float64 `json:"lo,omitempty"`
+		Hi *float64 `json:"hi,omitempty"`
+	}
+	type styleRuleJSON struct {
+		Value   []string   `json:"value,omitempty"`
+		Range   *rangeJSON `json:"range,omitempty"`
+		Prefix  string     `json:"prefix,omitempty"`
+		Default bool       `json:"default,omitempty"`
+		Color   string     `json:"color"`
+		// What a matching value means, for the tooltip. Absent when the value
+		// speaks for itself.
+		Description string `json:"description,omitempty"`
+	}
+	type valueStyleJSON struct {
+		// "tag" or "text"; the server has already filled in the default.
+		Type  string          `json:"type"`
+		Rules []styleRuleJSON `json:"rules"`
 	}
 
 	type toolJSON struct {
@@ -126,6 +155,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		TailMaxSecs  float64      `json:"tail_max_seconds"`
 		Queries      []presetJSON `json:"queries"`
 		Tools        []toolJSON   `json:"tools"`
+		// Only the styles the tools above actually refer to: a style nobody on
+		// this rail can reach is not this caller's business.
+		ValueStyles map[string]valueStyleJSON `json:"value_styles,omitempty"`
 	}{
 		Version:      s.version,
 		Commit:       s.commit,
@@ -157,7 +189,32 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		fields := make([]fieldJSON, 0, len(t.Fields))
 		for _, f := range t.Fields {
-			fields = append(fields, fieldJSON{Name: f.Name, Label: f.Label})
+			fields = append(fields, fieldJSON{Name: f.Name, Label: f.Label, Style: f.Style})
+			if _, done := out.ValueStyles[f.Style]; f.Style == "" || done {
+				continue
+			}
+			style := s.cfg.ValueStyles[f.Style]
+			rules := make([]styleRuleJSON, 0, len(style.Rules))
+			for _, r := range style.Rules {
+				rule := styleRuleJSON{
+					Value: r.Value, Prefix: r.Prefix, Default: r.Default,
+					Color: r.Color, Description: r.Description,
+				}
+				if b, ok := r.Bounds(); ok {
+					rule.Range = &rangeJSON{}
+					if b.HasLo {
+						rule.Range.Lo = &b.Lo
+					}
+					if b.HasHi {
+						rule.Range.Hi = &b.Hi
+					}
+				}
+				rules = append(rules, rule)
+			}
+			if out.ValueStyles == nil {
+				out.ValueStyles = make(map[string]valueStyleJSON, 1)
+			}
+			out.ValueStyles[f.Style] = valueStyleJSON{Type: style.Type, Rules: rules}
 		}
 		out.Tools = append(out.Tools, toolJSON{
 			ID: t.ID, Tooltip: t.Tooltip, Icon: t.Icon, Letters: t.Letters,

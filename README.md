@@ -33,7 +33,8 @@ One Go binary with the Vue SPA embedded in it, one YAML file, and no database.
 - **Timestamps** in the timezone you pick.
 - **Tools** — configurable icons in the left rail, each scoping the session to a
   slice of the logs. Applied server-side.
-- **Shareable state** — the query and time range live in the URL.
+- **Shareable state** — the tool is the path (`/http`), and the query and time
+  range live in the URL with it.
 - **OIDC login** — any conformant provider.
 - **Prometheus exporter** — built in, optional, with alerting rules included.
 
@@ -113,19 +114,67 @@ tools:
       - _msg
       - {name: payload.response.status_code, label: status}
 
-  - id: api
+  - id: apilogs
     letters: API              # up to three characters, instead of an icon
     query: 'system: api'
 ```
 
-`id` is required and unique — it is what the URL carries and what each request
-sends, so renaming one breaks links to it. `tooltip` defaults to the id.
+`id` is required and unique — it *is* the URL, since a tool is a path segment
+(`/http` selects the http tool above), and it is what each request sends, so
+renaming one breaks links to it. Letters, digits, dashes and underscores, and
+not `api`, `healthz` or `assets`: the server answers those paths itself, and a
+tool named for one is refused at startup rather than becoming a dead link.
+`tooltip` defaults to the id.
 
 Each entry is an icon in the rail, labelled on hover. Selecting one scopes
 everything — rows, histogram, facets, autocomplete, live tail — to its query,
 shown as a static prefix beside the input. Each tool keeps its own query and its
 own columns; `fields` is the default set, and whatever the reader picks is
 remembered per tool in their browser.
+
+### Value styles
+
+A field can carry `style:`, naming one of the ways to draw values defined once
+at the top level — colour in the table and in the log entry, so a 500 among two
+hundred 200s is found by eye rather than by reading the column:
+
+```yaml
+value_styles:
+  http_status:                          # what yeti-web's API log has always done
+    rules:
+      - {range: 200-399, color: ok}
+      - {range: 400-499, color: warn, description: rejected — the request was wrong}
+      - {range: 500-599, color: error, description: the application failed}
+  slow:
+    type: text
+    rules:
+      - {range: 1000-, color: error}    # a threshold, with no upper bound
+      - {range: 250-999, color: warn}
+
+tools:
+  - id: http
+    fields:
+      - {name: payload.status, label: status, style: http_status}
+      - {name: duration, style: slow}
+```
+
+`type` says how the colour lands. `tag`, the default, is a tinted pill — for a
+category like a status or a method, read as a badge. `text` colours the value
+itself — for a measurement that is merely alarming past some point, where a
+column of pills would read as categories and the digits would stop lining up.
+
+`rules` are tried in order, first match wins, and each carries exactly one
+matcher — `value` (one or a list), `range` (inclusive, numeric values only,
+either end optional), `prefix`, or `default` (last rule only) — plus a colour
+named from `ok`, `warn`, `error`, `info`, `neutral`, `muted`, and optionally a
+`description`, which appears under the value in the cell's tooltip: the colour
+says a value is worth attention, the description says why. Names rather than
+hex: each resolves to the current theme's own colour, so styles work in light and
+dark. A value no rule matches is drawn as plain text.
+
+Matching happens in the browser; the server publishes the styles with the rest
+of the config and refuses a bad one — unknown colour or type, backwards range,
+`style:` naming one that does not exist — at startup.
 
 Each tool carries either an `icon` or up to three `letters` — past a handful of
 tools the abstract shapes stop being distinguishable, while `API` needs no

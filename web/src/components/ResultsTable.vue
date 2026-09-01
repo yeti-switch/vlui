@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { formatIfInstant, formatStamp, parseLogTime } from '../time'
-import type { LogRow } from '../types'
+import { valueMatcher } from '../valuestyle'
+import type { LogRow, StyleRule, ValueStyle } from '../types'
 
 const props = defineProps<{
   rows: LogRow[]
@@ -10,6 +11,9 @@ const props = defineProps<{
   // values — "payload.response.status_code" over "200" — and the header is what
   // sizes the column, so a deployment can name it something shorter.
   labels: Record<string, string>
+  // How each column's values are drawn, by field name, for the columns a
+  // deployment has said something about. Everything else is plain text.
+  styles: Record<string, ValueStyle>
   selectedIndex: number
   running: boolean
 }>()
@@ -60,15 +64,39 @@ const visible = computed(() => props.rows.slice(start.value, start.value + count
  * The cell font is monospace, so a character count converts exactly to pixels
  * once one character has been measured. */
 // A floor, not a target. Low enough that a three-letter field — "pop" holding
-// "fra" — is a three-letter column: it needs 22px of text and 16 of padding,
-// and anything wider is space taken from _msg for nothing. High enough that a
-// one-character column still reads as a column.
-const MIN_COLUMN = 44
+// "fra" — is a three-letter column: it needs 22px of text and CELL_PADDING
+// around it, and anything wider is space taken from _msg for nothing. High
+// enough that a one-character column still reads as a column.
+const MIN_COLUMN = 32
 const MAX_COLUMN = 400
 // _msg is the log line and deserves more room, but not an unbounded amount: one
 // stack trace should not push every other column off a 4000px scroll.
 const MAX_MSG = 720
-const CELL_PADDING = 18 // .cell's 8px either side, plus a little air
+
+/* The width a cell needs on top of its text: .cell's padding either side, plus
+ * a little air so a rounded-down character does not ellipsize a value that
+ * fits.
+ *
+ * It is also, exactly, the whitespace between the last character of one column
+ * and the first character of the next — the padding on the right of one cell
+ * and the left of the next add up to it — so it is the only number that decides
+ * how far apart two values sit when both columns are sized to their content. At
+ * 8px either side that was 18px, near three characters of nothing at this font
+ * size, on every row and between every pair of columns. 4px either side reads
+ * as a column boundary just as clearly and gives back 8px per column.
+ *
+ * MUST agree with .cell and .hcell in the stylesheet below: the widths here are
+ * computed from it, and a cell whose real padding is wider than this ellipsizes
+ * text that was measured to fit. */
+const CELL_PADDING = 10
+
+// A tagged value is drawn inside a pill, which is wider than the text by its
+// own padding either side. Only the columns that carry tags pay for it.
+//
+// MUST agree with .tag in the stylesheet below, for the same reason
+// CELL_PADDING must agree with .cell: these widths are computed, not measured,
+// and a pill wider than the arithmetic says would ellipsize a value that fits.
+const TAG_PADDING = 10
 
 // Rows are sampled rather than scanned: 5000 rows times a dozen columns on
 // every streamed batch would be real work, and the widest value in the first
@@ -97,15 +125,24 @@ const columnWidths = computed<number[]>(() => {
   const sample = props.rows.length > WIDTH_SAMPLE ? props.rows.slice(0, WIDTH_SAMPLE) : props.rows
 
   return props.columns.map((column) => {
+    // The widest value in the sample, in full. Not a percentile of it: a column
+    // that ellipsizes an address or a path to save width has taken away the one
+    // thing the reader put it on screen for. Whatever room the values need is
+    // what they get; the gap between two columns is closed by the padding
+    // around them, not by cutting into them.
+    //
     let widest = 0
     for (const row of sample) {
       const len = cell(row, column).length
       if (len > widest) widest = len
     }
-    const content = widest * charWidth.value + CELL_PADDING
+    // Only a pill is wider than its text; colouring the text costs nothing.
+    const content =
+      widest * charWidth.value + CELL_PADDING + (props.styles[column] && pill(column) ? TAG_PADDING : 0)
 
-    // The header is its own constraint, and a different font: smaller, and not
-    // monospace, so its name is measured generously rather than exactly.
+    // The header is its own constraint. Same font as the cells — .mono applies
+    // to the header cell too, and wins over the smaller size .head inherits —
+    // so it measures with the same character width.
     //
     // No allowance for the remove button. It is invisible until the header is
     // hovered, and reserving 28px in every column for a control nobody is
@@ -118,18 +155,52 @@ const columnWidths = computed<number[]>(() => {
   })
 })
 
-const gridTemplate = computed(() =>
-  props.columns
-    .map((c, i) => {
-      const w = columnWidths.value[i] ?? MIN_COLUMN
-      // _msg takes any slack going, so a table narrower than the window does
-      // not leave a stripe of empty grid down the right-hand side. Every other
-      // column is exactly as wide as its content needs, which is what makes the
-      // row overflow — and the scrollbar appear — when they do not all fit.
-      return c === '_msg' ? `minmax(${w}px, 1fr)` : `${w}px`
-    })
-    .join(' '),
-)
+/* Every column is exactly as wide as its content needs — which is what makes
+ * the row overflow, and the horizontal scrollbar appear, when they do not all
+ * fit — with one exception and one addition.
+ *
+ * The exception is _msg where _msg is last: the log line is what the reader
+ * came for, so it takes any width the window has spare. Only where it is last.
+ * A stretched column in the MIDDLE of a row does not absorb the slack, it moves
+ * it inside the table, and puts a hand's width of nothing between that column's
+ * values and the next one's.
+ *
+ * The addition, for every other arrangement, is an empty track on the end that
+ * soaks up the same slack. It has no cells in it — grid leaves a track without
+ * children empty — so the width goes somewhere harmless instead of stretching
+ * whichever column happens to be last, and a table narrower than the window
+ * still does not leave a stripe of unpainted grid down its right-hand side. */
+const gridTemplate = computed(() => {
+  const last = props.columns.length - 1
+
+  const tracks = props.columns.map((c, i) => {
+    const w = columnWidths.value[i] ?? MIN_COLUMN
+    return c === '_msg' && i === last ? `minmax(${w}px, 1fr)` : `${w}px`
+  })
+
+  if (props.columns[last] !== '_msg') tracks.push('1fr')
+  return tracks.join(' ')
+})
+
+/* One memoised matcher per tagged column, rebuilt only when the rules change.
+ *
+ * Built here rather than per cell so the cache survives scrolling: the table
+ * re-renders its window on every scroll event, and a fresh matcher each time
+ * would be a cache that never hits. */
+const matchers = computed(() => {
+  const out: Record<string, (value: string) => StyleRule | null> = {}
+  for (const [field, style] of Object.entries(props.styles)) out[field] = valueMatcher(style.rules)
+  return out
+})
+
+// A pill or bare colour, for the template to pick a class with.
+function pill(column: string): boolean {
+  return props.styles[column]?.type !== 'text'
+}
+
+function rule(row: LogRow, column: string): StyleRule | null {
+  return matchers.value[column]?.(cell(row, column)) ?? null
+}
 
 function cell(row: LogRow, column: string): string {
   const raw = row[column]
@@ -144,24 +215,67 @@ function cell(row: LogRow, column: string): string {
   return formatIfInstant(raw) ?? raw
 }
 
-// The hover title, which is where the untouched value lives once a cell has
-// been reformatted — nothing is hidden, it is one hover away.
-// What the header shows, and what it says on hover: the label when there is
-// one, with the real field name a mouse away so nothing is unfindable.
+/* What each header shows: the configured label, or — failing that — the field
+ * name shortened to its last dotted segment. "payload.response.status_code"
+ * reads as "status_code".
+ *
+ * The header is a constraint on the column's width, and a dotted name is
+ * routinely several times wider than the values under it: 28 characters of
+ * header over three of data leaves the reader looking at 200px of empty grid on
+ * every row. The leaf is the part that identifies the field anyway — the prefix
+ * says where in a JSON document it came from, which is a question for the row
+ * drawer, not for a column heading.
+ *
+ * Only where the leaf is unambiguous among the columns on screen: with
+ * payload.status and status both up, two headers reading "status" would be
+ * worse than two long ones. The full name is in the header's tooltip, and
+ * untouched in the field panel and the log entry, which is where somebody goes
+ * to find out what a column actually is.
+ *
+ * A label from the config still wins: it can shorten what has no dots in it at
+ * all — "location" to "pop" — which no rule here could guess. */
+const headerNames = computed<Record<string, string>>(() => {
+  const leaves = new Map<string, number>()
+  for (const c of props.columns) {
+    const leaf = c.slice(c.lastIndexOf('.') + 1)
+    leaves.set(leaf, (leaves.get(leaf) ?? 0) + 1)
+  }
+
+  const out: Record<string, string> = {}
+  for (const c of props.columns) {
+    const configured = props.labels[c]
+    const leaf = c.slice(c.lastIndexOf('.') + 1)
+    out[c] = configured || (leaf && leaves.get(leaf) === 1 ? leaf : c)
+  }
+  return out
+})
+
 function headerLabel(column: string): string {
-  return props.labels[column] ?? column
+  return headerNames.value[column] ?? column
 }
 
+// What the header says on hover: the real field name, and what it was shortened
+// to, so nothing on screen is unfindable.
 function headerTitle(column: string): string {
-  const label = props.labels[column]
-  return label ? `${column} (shown as ${label})` : column
+  const shown = headerLabel(column)
+  return shown === column ? column : `${column} (shown as ${shown})`
 }
 
+// The cell's hover title, which is where the untouched value lives once a cell
+// has been reformatted or ellipsized — nothing is hidden, it is one hover away.
+//
+// A matched rule's description follows on its own line. The colour says a value
+// is worth attention; the line under it says why, which is the half a colour
+// cannot carry.
 function cellTitle(row: LogRow, column: string): string {
   const raw = row[column]
   if (raw === undefined) return ''
+
   const shown = cell(row, column)
-  return shown === raw ? raw : `${shown}  (${raw})`
+  const title = shown === raw ? raw : `${shown}  (${raw})`
+
+  const description = rule(row, column)?.description
+  return description ? `${title}\n${description}` : title
 }
 
 // The scroller's height is not known until it is laid out, and it changes with
@@ -206,7 +320,16 @@ function mounted(el: Element | null) {
           @click="emit('select', start + i)"
         >
           <div v-for="c in columns" :key="c" class="cell mono" :title="cellTitle(row, c)">
-            {{ cell(row, c) }}
+            <!-- Coloured only where a rule matched: an unmatched value is
+                 drawn as itself, not as a colourless pill. That way the colours
+                 in a column mean something by their presence as well as their
+                 hue. -->
+            <span
+              v-if="rule(row, c)"
+              :class="[pill(c) ? 'tag' : 'tint', `v-${rule(row, c)?.color}`]"
+              >{{ cell(row, c) }}</span
+            >
+            <template v-else>{{ cell(row, c) }}</template>
           </div>
         </div>
       </div>
@@ -248,7 +371,7 @@ function mounted(el: Element | null) {
   position: relative;
   display: flex;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 4px; /* CELL_PADDING */
   overflow: hidden;
 }
 
@@ -284,7 +407,7 @@ function mounted(el: Element | null) {
 .row.selected { background: var(--accent-soft); }
 
 .cell {
-  padding: 0 8px;
+  padding: 0 4px; /* CELL_PADDING */
   white-space: pre;
   overflow: hidden;
   text-overflow: ellipsis;

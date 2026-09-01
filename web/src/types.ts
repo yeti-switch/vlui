@@ -29,7 +29,46 @@ export interface Tool {
 export interface Field {
   name: string
   label?: string
+  // Names one of AppConfig.value_styles, which decides how this field's values
+  // are drawn. Absent means plain text.
+  style?: string
 }
+
+/* One named way of drawing values: how, and which value gets which colour.
+ *
+ * `tag` puts the value in a tinted pill — a category, read as a badge. `text`
+ * colours the value itself — a measurement that is merely alarming past some
+ * point, where a column of pills would read as categories and the digits would
+ * stop lining up. The server fills in the type, so it is never absent here. */
+export interface ValueStyle {
+  type: StyleType
+  rules: StyleRule[]
+}
+
+export type StyleType = 'tag' | 'text'
+
+/* One rule of a value style: what to match, and the colour a matching value is
+ * drawn in. Exactly one matcher is set — the server refuses anything else — and
+ * a style's rules are tried in order, first match wins.
+ *
+ * `range` arrives already parsed: the server validated "200-399" and sends the
+ * numbers, so there is one place that decides what a range means. */
+export interface StyleRule {
+  value?: string[]
+  // Either end may be absent, which is an OPEN end rather than a zero: {lo:
+  // 1000} is "a thousand and up", which is what a threshold is.
+  range?: { lo?: number; hi?: number }
+  prefix?: string
+  default?: boolean
+  color: StyleColor
+  // What a matching value means, shown under the value in the cell's tooltip.
+  // Absent when the value speaks for itself.
+  description?: string
+}
+
+// The colours the stylesheet defines, in both themes. Anything else is refused
+// at startup, so this list and the CSS are the same list.
+export type StyleColor = 'ok' | 'warn' | 'error' | 'info' | 'neutral' | 'muted'
 
 export interface User {
   sub: string
@@ -51,6 +90,9 @@ export interface AppConfig {
   tail_max_seconds: number
   queries: Preset[]
   tools: Tool[]
+  // The value styles a tool's fields refer to by name. Absent when no tool this
+  // account can see uses one.
+  value_styles?: Record<string, ValueStyle>
 }
 
 export interface HitsSeries {

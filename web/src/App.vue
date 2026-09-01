@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
 import { ApiError, fetchConfig, fetchFacets, fetchHits, openTail, streamQuery } from './api'
 import { parseLogTime, resolveRange, type RangeSelection } from './time'
-import type { AppConfig, Facet, HitsResponse, LogRow, TimeRange, Tool } from './types'
+import type { AppConfig, Facet, HitsResponse, LogRow, TimeRange, Tool, ValueStyle } from './types'
 import Facets from './components/Facets.vue'
 import HitsChart from './components/HitsChart.vue'
 import QueryBar from './components/QueryBar.vue'
@@ -102,8 +102,22 @@ function resetColumns() {
 // first, then the config's defaults, then _time and _msg.
 function columnsFor(id: string): string[] {
   const remembered = columnsByTool.value[id]
-  if (remembered?.length) return [...remembered]
+  if (remembered?.length) return withMsgLast(remembered)
+  // The config's order is the config's business: an operator who writes _msg in
+  // the middle of `fields` gets it there.
   return defaultColumnsFor(id)
+}
+
+// _msg at the end of a remembered set, wherever it was stored.
+//
+// It is where toggleColumn puts every column it adds, and where the table wants
+// it — _msg is the log line, it is the widest thing on the row, and it is the
+// column that takes any width the window has spare. A set remembered before
+// that was true has _msg somewhere in the middle with a column or two stranded
+// behind it, which is a layout nobody chose and cannot fix from the UI.
+function withMsgLast(cols: string[]): string[] {
+  if (!cols.includes('_msg') || cols[cols.length - 1] === '_msg') return [...cols]
+  return [...cols.filter((c) => c !== '_msg'), '_msg']
 }
 
 // What the deployment says this tool should show, before anyone changed it.
@@ -125,6 +139,26 @@ const labels = computed<Record<string, string>>(() => {
   const out: Record<string, string> = {}
   for (const f of tool.value?.fields ?? []) {
     if (f.label) out[f.name] = f.label
+  }
+  return out
+})
+
+/* The value style in force for each field, resolved from the style names the
+   active tool's fields refer to.
+   
+   Resolved here rather than in the table so the lookup happens once per tool
+   instead of once per cell, and so a style that is named but not defined —
+   which the server refuses, but a client should not depend on — simply leaves
+   the field plain. Keyed by field name and taken from the ACTIVE tool, the same
+   way labels are: what a value MEANS is a property of the slice of logs it came
+   from, and a colour carried over from the tool you are not looking at would be
+   a lie in the same way a label would. */
+const columnStyles = computed<Record<string, ValueStyle>>(() => {
+  const styles = cfg.value?.value_styles ?? {}
+  const out: Record<string, ValueStyle> = {}
+  for (const f of tool.value?.fields ?? []) {
+    const style = f.style ? styles[f.style] : undefined
+    if (style?.rules?.length) out[f.name] = style
   }
   return out
 })
@@ -223,7 +257,7 @@ async function run() {
 
   const window_ = resolveRange(range.value)
   shownRange.value = window_
-  writeHash()
+  writeURL()
 
   running.value = true
   error.value = ''
@@ -330,7 +364,7 @@ function toggleTail() {
   facets.value = []
   shownRange.value = null
   tailing.value = true
-  writeHash()
+  writeURL()
 
   tailSource = openTail(query.value, activeTool.value, {
     onRow: (row) => {
@@ -394,7 +428,15 @@ function toggleColumn(field: string) {
     if (field === '_time') return
     columns.value = columns.value.filter((c) => c !== field)
   } else {
-    columns.value = [...columns.value, field]
+    // Before _msg, not after it. _msg is the log line: it is the widest column
+    // and the one that takes any spare width in the window, so a column added
+    // beyond it sits across a band of empty grid that grows with the window.
+    // Everything worth reading alongside a line goes to the left of it.
+    const msg = columns.value.indexOf('_msg')
+    columns.value =
+      msg >= 0
+        ? [...columns.value.slice(0, msg), field, ...columns.value.slice(msg)]
+        : [...columns.value, field]
   }
   rememberColumns()
 }
@@ -416,7 +458,7 @@ function selectTool(id: string) {
   query.value = remembered ?? defaultQueryFor(toolById(id))
   columns.value = columnsFor(id)
 
-  writeHash()
+  writeURL()
   run()
 }
 
@@ -437,45 +479,85 @@ function download() {
 
 /* --- shareable state ------------------------------------------------------ */
 
-// The query, the window and the row cap live in the URL, so a link to what you
-// are looking at is the address bar rather than a screenshot.
-function writeHash() {
+/* The tool is the PATH; the query, the window and the row cap are the fragment.
+ * /http#q=… rather than /#tool=http&q=…
+ *
+ * A tool is the nearest thing this app has to a page: it is the slice of the
+ * logs everything else is read against, it is chosen once and then lived in,
+ * and it is the part somebody says out loud — "it's on /http". That belongs in
+ * the path, where it can be typed from memory, bookmarked and linked to from a
+ * runbook. The rest stays in the fragment, because it is the state of one look
+ * at that slice rather than a place: it changes with every keystroke of a
+ * query, and keeping it out of the path means the server is never asked about
+ * it.
+ *
+ * Nothing has to be routed for this. The server answers any path it does not
+ * recognise with the SPA and injects a <base href>, so a deep link survives a
+ * cold browser and the app still works mounted under /logs. Tool ids that would
+ * be shadowed by a real route — api, healthz, assets — are refused at startup,
+ * where the operator can see the reason. */
+
+// The mount point every path here is relative to: "/" or "/logs/".
+//
+// From the <base href> the server injects. In `npm run dev` there is no <base>
+// and baseURI is the document's own URL, so on /yl it would read as a mount
+// point of "/yl" — hence the trim to the last slash, which leaves "/" there and
+// the real base untouched in production.
+function basePath(): string {
+  const p = new URL(document.baseURI).pathname
+  return p.endsWith('/') ? p : p.slice(0, p.lastIndexOf('/') + 1)
+}
+
+// The tool the address bar names, which is not yet known to be a tool that
+// exists. Anything after it — a trailing slash, a path someone appended — is
+// not ours and is dropped.
+function toolFromPath(): string {
+  const path = window.location.pathname
+  const base = basePath()
+  const rest = path.startsWith(base) ? path.slice(base.length) : path.replace(/^\/+/, '')
+  return rest.split('/')[0] ?? ''
+}
+
+function writeURL() {
   const p = new URLSearchParams()
   p.set('q', query.value)
   p.set('limit', String(limit.value))
-  if (activeTool.value) p.set('tool', activeTool.value)
   if (range.value.kind === 'relative') {
     p.set('range', String(range.value.seconds))
   } else {
     p.set('start', String(range.value.startMs))
     p.set('end', String(range.value.endMs))
   }
-  history.replaceState(null, '', `#${p.toString()}`)
+  history.replaceState(null, '', `${basePath()}${activeTool.value}#${p.toString()}`)
 }
 
-function readHash(): boolean {
-  const raw = window.location.hash.replace(/^#/, '')
-  if (!raw) return false
+// What the URL asks for, applied to the state the config has just defaulted.
+//
+// Nothing is returned: the caller runs whatever this leaves behind, so there is
+// no question left for it to answer.
+function readURL() {
+  // The tool first: it decides which defaults everything after it falls back to.
+  //
+  // Only a tool this deployment actually offers, and only one this account was
+  // offered: a stale id from a renamed tool, an invented one, or a path that
+  // was never ours falls back to the default rather than erroring on every
+  // request.
+  const wanted = toolFromPath()
+  if (wanted && (cfg.value?.tools ?? []).some((t) => t.id === wanted)) {
+    activeTool.value = wanted
+    // A path naming a tool but carrying no query means that tool's default, not
+    // the previous tool's default that was set a moment ago in onMounted. A q
+    // in the fragment overrides it just below.
+    query.value = defaultQueryFor(toolById(wanted))
+  }
 
-  const p = new URLSearchParams(raw)
+  const p = new URLSearchParams(window.location.hash.replace(/^#/, ''))
   const q = p.get('q')
   if (q) query.value = q
+  if (q && activeTool.value) queriesByTool.value[activeTool.value] = q
 
   const l = Number(p.get('limit'))
   if (Number.isFinite(l) && l > 0) limit.value = l
-
-
-  // Only a tool this deployment actually offers, and only one this account was
-  // offered: a stale or invented id in a shared link falls back to the default
-  // rather than erroring on every request.
-  const wanted = p.get('tool')
-  if (wanted && (cfg.value?.tools ?? []).some((t) => t.id === wanted)) {
-    activeTool.value = wanted
-    // A link carrying a tool but no query means that tool's default, not the
-    // previous tool's default that was set a moment ago in onMounted.
-    if (!q) query.value = defaultQueryFor(toolById(wanted))
-  }
-  if (q && activeTool.value) queriesByTool.value[activeTool.value] = q
 
   // Columns come last, once the tool is known. They are NOT in the URL: they
   // are a preference of the person reading, not a property of what is being
@@ -487,12 +569,11 @@ function readHash(): boolean {
   const end = Number(p.get('end'))
   if (Number.isFinite(start) && Number.isFinite(end) && start > 0 && end > start) {
     range.value = { kind: 'absolute', startMs: start, endMs: end }
-    return Boolean(q)
+    return
   }
 
   const seconds = Number(p.get('range'))
   if (Number.isFinite(seconds) && seconds > 0) range.value = { kind: 'relative', seconds }
-  return Boolean(q)
 }
 
 /* --- session -------------------------------------------------------------- */
@@ -567,8 +648,19 @@ onMounted(async () => {
     return
   }
 
-  const hadQuery = readHash()
-  if (hadQuery) run()
+  /* And then it runs, whether or not the URL carried a query.
+   *
+   * There is always something to run by this point: the tool's own filter, or
+   * the * that a tool without one defaults to, over the config's default range
+   * and row cap. Arriving at an empty table with a Run button is asking for a
+   * click that carries no decision — nobody opens /http to look at nothing, and
+   * the reader who wanted a different window changes it and runs again.
+   *
+   * It also settles the address bar: run() writes the whole URL, so a bare
+   * /http becomes /http#q=…&limit=…&range=… — what is actually on screen, ready
+   * to be copied to somebody else. */
+  readURL()
+  run()
 })
 
 onUnmounted(() => {
@@ -668,6 +760,7 @@ onUnmounted(() => {
               :rows="rows"
               :columns="columns"
               :labels="labels"
+              :styles="columnStyles"
               :selected-index="selectedIndex"
               :running="running"
               @select="selectedIndex = $event === selectedIndex ? -1 : $event"
@@ -680,6 +773,7 @@ onUnmounted(() => {
             v-if="selectedRow"
             :row="selectedRow"
             :labels="labels"
+            :styles="columnStyles"
             @close="selectedIndex = -1"
             @filter="addFilter"
             @toggle-column="toggleColumn"

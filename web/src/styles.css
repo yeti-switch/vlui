@@ -148,6 +148,51 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 
 code, .mono { font-family: var(--mono); font-size: 12px; }
 
+/* Value styles: a field whose values carry meaning — an HTTP status, a level —
+   drawn as a small tinted pill so the eye finds the 500 without reading the
+   column.
+   
+   Tinted background with coloured text rather than white-on-solid, which is
+   what yeti-web's ActiveAdmin does: a table of solid pills reads as a chart, and
+   this is a table you scan for the one row that is not green. The value is left
+   exactly as it was logged — no uppercasing, and no letter-spacing, which would
+   also break the character-count arithmetic that sizes the column.
+   
+   Horizontal padding here MUST agree with TAG_PADDING in ResultsTable.vue. */
+.tag {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 3px;
+  line-height: 16px;
+  vertical-align: baseline;
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+}
+
+/* The other half of the same mechanism: the colour on the value itself, with no
+   pill around it.
+   
+   For measurements rather than categories. A duration is a number that happens
+   to be alarming past some point, and a column of pills around numbers reads as
+   a set of categories it is not — the digits stop lining up, and the eye starts
+   reading badges instead of comparing figures. Colour alone says "this one"
+   without saying "this is a kind of thing". Slightly bolder, because coloured
+   12px monospace on its own is easy to miss. */
+.tint {
+  color: var(--tag-fg);
+  font-weight: 600;
+}
+
+/* Foreground from the theme's own semantic colours; background mixed from it,
+   so the pair works in both themes and a new theme gets tags for free. Shared
+   by .tag and .tint — the colour is the rule's, the shape is the field's. */
+.v-ok { --tag-fg: var(--ok); --tag-bg: color-mix(in srgb, var(--ok) 14%, transparent); }
+.v-warn { --tag-fg: var(--warn); --tag-bg: color-mix(in srgb, var(--warn) 16%, transparent); }
+.v-error { --tag-fg: var(--danger); --tag-bg: color-mix(in srgb, var(--danger) 14%, transparent); }
+.v-info { --tag-fg: var(--accent); --tag-bg: color-mix(in srgb, var(--accent) 14%, transparent); }
+.v-neutral { --tag-fg: var(--text); --tag-bg: var(--hover); }
+.v-muted { --tag-fg: var(--text-dim); --tag-bg: color-mix(in srgb, var(--text-dim) 12%, transparent); }
+
 /* Scrollbars: as narrow as they can be and still be grabbed.
 
    This screen is a table of log lines, and a 15px platform scrollbar takes that

@@ -193,9 +193,15 @@ auth:
 # front of the query would be escapable through a subquery — VictoriaLogs'
 # own documentation names extra_filters as the mechanism for access control.
 #
-# id:      REQUIRED and unique. It is what the URL carries and what every
-#          request sends, so treat it as a name rather than a label: renaming it
+# id:      REQUIRED and unique. It IS the URL — the tool is a path segment, so
+#          this one is at https://logs.example.com/<id> — and it is what every
+#          request sends. Treat it as a name rather than a label: renaming it
 #          breaks existing links to that tool.
+#
+#          Letters, digits, dashes and underscores. Not api, healthz or assets:
+#          the server answers those paths itself, so a tool there would be a
+#          link that never reaches the UI. Refused at startup rather than
+#          silently.
 # tooltip: the label shown on hover. Defaults to the id.
 # icon:    one of gear, yeti, bolt, bug, chart, cloud, database, globe, lock,
 #          phone, server, tag, terminal. An unknown name fails at startup.
@@ -240,13 +246,84 @@ auth:
 #       - _time
 #       - _msg
 #       - {name: payload.method, label: method}
-#       - {name: payload.response.status_code, label: status}
+#       - {name: payload.response.status_code, label: status, style: http_status}
 #
-#   - id: api
-#     # No tooltip: the id is the label.
+#   - id: apilogs
+#     # No tooltip: the id is the label. Not `api`: that path is the app's own
+#     # API, and /apilogs is what the rail's icon links to.
 #     letters: API
 #     query: 'system: api'
 #
+# Named ways of drawing a field's VALUES, referred to by a field's `style:`
+# above. A matching value is coloured, so a 500 among two hundred 200s is found
+# by eye rather than by reading the column.
+#
+# Each style says how it draws and which value gets which colour:
+#
+#   type:  tag   (the default) a small tinted pill around the value. For a
+#                CATEGORY — a status, a level, a method: a handful of values,
+#                read as a badge.
+#          text  the value itself, coloured. For a MEASUREMENT that is merely
+#                alarming past some point. A column of pills around numbers
+#                reads as a set of categories it is not, and the digits stop
+#                lining up.
+#
+#   rules: tried IN ORDER, first match wins — the only precedence there is.
+#
+# A rule carries exactly one matcher:
+#
+#   value:   the value, exactly. One, or a list of them.
+#   range:   "200-399", inclusive, for values that are numbers. A value that is
+#            not a number does not match. Either end may be left off, which is
+#            what a threshold looks like: "1000-" is everything from a thousand
+#            up, "-100" everything to a hundred.
+#   prefix:  values that start with it.
+#   default: everything the rules above did not match. Last rule only.
+#
+# and one colour, by name: ok, warn, error, info, neutral or muted. Names rather
+# than hex because the UI has a light and a dark theme, and a colour that reads
+# in one is unreadable in the other; each name resolves to that theme's own.
+# A value no rule matches is drawn as plain text, so the presence of a colour
+# means something as well as its hue.
+#
+# A rule may also carry a `description:`, which appears under the value in the
+# cell's tooltip. The colour says a value is worth attention; the description
+# says why, which is the half a colour cannot carry — "429" is a question the
+# deployment already knows the answer to. Optional: a tooltip that repeats what
+# the value already says is noise.
+#
+# Anything else — an unknown colour or type, a range written backwards, a
+# `style:` naming one that does not exist — is refused at startup rather than
+# showing up as an uncoloured value three screens into a result set.
+#
+# value_styles:
+#   # What yeti-web's API log has always done: 2xx-3xx green, 4xx amber, 5xx red.
+#   http_status:
+#     rules:
+#       - {range: 200-399, color: ok}
+#       - {range: 400-499, color: warn, description: rejected — the request was wrong}
+#       - {range: 500-599, color: error, description: the application failed}
+#
+#   level:
+#     rules:
+#       - {value: [error, fatal], color: error}
+#       - {value: warn, color: warn}
+#       - {value: info, color: ok}
+#       - {default: true, color: neutral}
+#
+#   # A threshold rather than bands, and no upper bound to be exceeded.
+#   slow:
+#     type: text
+#     rules:
+#       - {range: 1000-, color: error}
+#       - {range: 250-999, color: warn}
+#
+# used as:
+#
+#   fields:
+#     - {name: payload.status, label: status, style: http_status}
+#     - {name: duration, style: slow}
+
 # IS THIS ACCESS CONTROL? Only if you make it so. By default every signed-in
 # account may select every tool, which is right when the rail is a set of
 # shortcuts — anyone can switch to the widest one, exactly as they could type

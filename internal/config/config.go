@@ -5,10 +5,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -49,6 +52,135 @@ type Config struct {
 	// to a slice of the logs — one system, one environment — by prepending its
 	// query to whatever the operator types.
 	Tools []Tool `yaml:"tools"`
+
+	// ValueStyles are named ways of drawing a field's values, keyed by the name
+	// a field's `style:` refers to.
+	//
+	// Defined here rather than on the field so one style serves every field
+	// that means the same thing: an HTTP status is an HTTP status whether it
+	// arrives as payload.status on one tool or response.code on another, and a
+	// colour scheme copied per column is a colour scheme that drifts per
+	// column.
+	ValueStyles map[string]ValueStyle `yaml:"value_styles"`
+}
+
+/* ValueStyle is one named way of drawing values: how they are drawn, and which
+ * value gets which colour.
+ *
+ * The two travel together because they are one decision. A style is written for
+ * a KIND of field — "this is an HTTP status", "this is a duration in
+ * milliseconds" — and what that kind of value should look like is settled at
+ * the same moment as which of its values are alarming. Kept apart, every field
+ * naming the style would have to repeat how to draw it, and the day one of them
+ * disagreed would be a Tuesday nobody enjoyed. */
+type ValueStyle struct {
+	// Type is how the colour lands: StyleTag (the default) draws the value in a
+	// small tinted pill, StyleText colours the value itself.
+	//
+	// A status is a CATEGORY — one of a handful of values, worth reading as a
+	// badge. A duration is a MEASUREMENT that happens to be alarming past some
+	// point; a column of pills around numbers reads as a category it is not,
+	// and the digits stop lining up to the eye. Colour on its own says "look at
+	// this one" without saying "this is a kind of thing".
+	Type string `yaml:"type"`
+
+	// Rules are tried IN ORDER and the first match wins, which is the only
+	// precedence anybody has to remember.
+	Rules []StyleRule `yaml:"rules"`
+}
+
+// The values ValueStyle.Type takes.
+const (
+	StyleTag  = "tag"
+	StyleText = "text"
+)
+
+// StyleTypes are those values, for the error a typo produces.
+var StyleTypes = []string{StyleTag, StyleText}
+
+/* StyleRule is one line of a style's rules: what to match, and what colour the
+ * value is drawn in when it matches.
+ *
+ * A rule carries exactly one matcher — two would be an intersection nobody
+ * asked for, and the error says so.
+ *
+ * Modelled on how yeti-web has always drawn these: 2xx-3xx green, 4xx amber,
+ * 5xx red, anything else plain. That mapping is a RANGE, which is why ranges
+ * are here alongside plain values. */
+type StyleRule struct {
+	// Value matches the field's value exactly. Either one value or a list:
+	//
+	//   {value: "200", color: ok}
+	//   {value: [error, fatal], color: error}
+	Value StringList `yaml:"value"`
+
+	// Range matches a NUMERIC value, inclusive, written "200-399". A value that
+	// is not a number simply does not match — the field carrying the range is
+	// the one place a log value's stringiness shows through.
+	//
+	// Either end may be left off: "1000-" is everything from a thousand up,
+	// "-100" everything to a hundred. That is what a threshold looks like — "a
+	// duration is bad past a second" has no upper bound, and inventing one
+	// invites the day a value sails over it and loses its colour.
+	Range string `yaml:"range"`
+
+	// Prefix matches values that start with it. The cheap half of a regular
+	// expression, which is deliberately not here: a pattern language in a
+	// config file is a debugger nobody has.
+	Prefix string `yaml:"prefix"`
+
+	// Default matches anything the rules above did not. Only on the last rule
+	// of a set, where it reads as what it is.
+	Default bool `yaml:"default"`
+
+	// Color is one of StyleColors. Names, not hex: the table is drawn in two
+	// themes, and a colour that works in one is unreadable in the other.
+	Color string `yaml:"color"`
+
+	// Description says what a matching value MEANS, on the second line of the
+	// cell's tooltip.
+	//
+	// A colour tells the reader that a value is worth their attention and
+	// nothing more; the amber is a question ("what is 429?") that the deployment
+	// already knows the answer to. Optional, because "500" needs no gloss to
+	// anyone reading a log, and a tooltip repeating the obvious is noise.
+	Description string `yaml:"description"`
+
+	// bounds is Range parsed once, at startup.
+	bounds RuleRange
+}
+
+// RuleRange is a parsed Range. An absent end is an open one, not a zero.
+type RuleRange struct {
+	Lo, Hi       float64
+	HasLo, HasHi bool
+}
+
+// Bounds returns the parsed Range, and whether this rule has one at all.
+func (r StyleRule) Bounds() (RuleRange, bool) {
+	return r.bounds, r.Range != ""
+}
+
+// StyleColors are the colours a rule may name. Each is a token the stylesheet
+// defines in both themes; anything else is refused at startup rather than
+// rendering as an invisible tag in one of them.
+var StyleColors = []string{"ok", "warn", "error", "info", "neutral", "muted"}
+
+// StringList accepts either one string or a list of them, so a rule matching a
+// single value does not have to be written as a list of one.
+type StringList []string
+
+func (l *StringList) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		*l = StringList{node.Value}
+		return nil
+	}
+	var many []string
+	if err := node.Decode(&many); err != nil {
+		return fmt.Errorf("line %d: want a value or a list of values", node.Line)
+	}
+	*l = many
+	return nil
 }
 
 // Tool is one icon in the rail.
@@ -60,13 +192,14 @@ type Config struct {
 type Tool struct {
 	// ID names the tool. Required, and unique within the list.
 	//
-	// It is what the URL carries and what every request sends, so it is the one
-	// part of a tool that must not change casually: a link to what somebody is
-	// looking at is a link to this string. Deriving it from the tooltip — as an
-	// earlier version did — meant renaming a tool silently broke every link to
-	// it, and two tools whose names differed only in punctuation collided.
+	// It is the URL — the tool is a path segment under the mount point, so this
+	// tool is at /<id> — and it is what every request sends. That makes it the
+	// one part of a tool that must not change casually: a link to what somebody
+	// is looking at is a link to this string. Deriving it from the tooltip — as
+	// an earlier version did — meant renaming a tool silently broke every link
+	// to it, and two tools whose names differed only in punctuation collided.
 	//
-	// Letters, digits, dashes and underscores.
+	// Letters, digits, dashes and underscores, and not one of reservedIDs.
 	ID string `yaml:"id"`
 
 	// Tooltip is the label shown on hover. Required: an icon-only rail with an
@@ -132,11 +265,20 @@ type Tool struct {
 	AllowedGroups []string `yaml:"allowed_groups"`
 }
 
-// Field is one column: the log field to show, and optionally what to call it in
-// the table header.
+// Field is one column: the log field to show, optionally what to call it in the
+// table header, and optionally how to colour its values.
 type Field struct {
 	Name  string `yaml:"name"`
 	Label string `yaml:"label"`
+
+	// Style names one of Config.ValueStyles, which then decides how this
+	// column's values are drawn — a 500 that is red wherever it appears is one
+	// less thing to read.
+	//
+	// Per field rather than per field NAME across the deployment: what a value
+	// means is a property of the slice of logs it came from, and the tool is
+	// what says which slice that is.
+	Style string `yaml:"style"`
 }
 
 // UnmarshalYAML accepts either shape:
@@ -161,9 +303,9 @@ func (f *Field) UnmarshalYAML(node *yaml.Node) error {
 	// everywhere else.
 	for i := 0; i < len(node.Content); i += 2 {
 		switch key := node.Content[i].Value; key {
-		case "name", "label":
+		case "name", "label", "style":
 		default:
-			return fmt.Errorf("line %d: field has no %q setting; want name or label", node.Content[i].Line, key)
+			return fmt.Errorf("line %d: field has no %q setting; want name, label or style", node.Content[i].Line, key)
 		}
 	}
 
@@ -385,6 +527,12 @@ func (c *Config) validate() error {
 		}
 	}
 
+	// Before the tools: a field's `style:` names one of these, and the check
+	// that it names a real one belongs where the styles are already known to be
+	// sound.
+	if err := c.validateValueStyles(); err != nil {
+		return err
+	}
 	if err := c.validateTools(); err != nil {
 		return err
 	}
@@ -409,13 +557,16 @@ func (c *Config) validateTools() error {
 		if bad := firstBadIDRune(t.ID); bad != 0 {
 			return fmt.Errorf("tools[%d]: id %q contains %q; use letters, digits, dashes and underscores", i, t.ID, bad)
 		}
+		if reservedIDs[t.ID] {
+			return fmt.Errorf("tools[%d]: id %q is a path this server already answers on, so /%s would never reach the UI; pick another id", i, t.ID, t.ID)
+		}
 		if first, dup := seen[t.ID]; dup {
 			return fmt.Errorf("tools[%d] and tools[%d]: both use the id %q, which has to be unique — it is how a request names one tool rather than the other",
 				i, first, t.ID)
 		}
 		seen[t.ID] = i
 
-		// The tooltip defaults to the id: a tool called "api" needs no second
+		// The tooltip defaults to the id: a tool called "billing" needs no second
 		// name to hover over, and an unlabelled icon would be a guessing game.
 		if t.Tooltip == "" {
 			t.Tooltip = t.ID
@@ -453,8 +604,15 @@ func (c *Config) validateTools() error {
 			f := &t.Fields[j]
 			f.Name = strings.TrimSpace(f.Name)
 			f.Label = strings.TrimSpace(f.Label)
+			f.Style = strings.TrimSpace(f.Style)
 			if f.Name == "" {
 				return fmt.Errorf("tools[%d] (%s): fields[%d] has no name", i, t.Tooltip, j)
+			}
+			if f.Style != "" {
+				if _, ok := c.ValueStyles[f.Style]; !ok {
+					return fmt.Errorf("tools[%d] (%s): fields[%d] (%s): style names %q, which is not in value_styles (%s)",
+						i, t.Tooltip, j, f.Name, f.Style, orNone(setNames(c.ValueStyles)))
+				}
 			}
 		}
 
@@ -470,6 +628,157 @@ func (c *Config) validateTools() error {
 	}
 
 	return nil
+}
+
+// reservedIDs are the ids a tool may not take, because the URL the UI would
+// give it is already answered by something else.
+//
+// The tool is a path segment under the mount point — /http is the http tool —
+// and the router reaches for its own routes first: /api is the API, /healthz is
+// the health check, and /assets is where the built JavaScript lives. A tool
+// named for one of those would be a link that silently returns JSON, or a
+// script, instead of the UI. Refused at startup, where the operator is looking,
+// rather than discovered by whoever clicks the icon.
+var reservedIDs = map[string]bool{
+	"api":     true,
+	"healthz": true,
+	"assets":  true,
+}
+
+/* validateValueStyles checks every rule of every style, fills in the default
+ * type, and parses the ranges once so the hot path never has to.
+ *
+ * All of it is refused at startup rather than at render time: a colour the
+ * stylesheet does not have, or a range written backwards, would otherwise
+ * appear as an uncoloured value in a table three screens down, on the one row a
+ * week where it matters. */
+func (c *Config) validateValueStyles() error {
+	for name, style := range c.ValueStyles {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("value_styles: a style has no name")
+		}
+
+		style.Type = strings.TrimSpace(style.Type)
+		if style.Type == "" {
+			style.Type = StyleTag
+		}
+		if !slices.Contains(StyleTypes, style.Type) {
+			return fmt.Errorf("value_styles[%s]: type is %q; want one of %s",
+				name, style.Type, strings.Join(StyleTypes, ", "))
+		}
+		if len(style.Rules) == 0 {
+			return fmt.Errorf("value_styles[%s]: no rules; a style that matches nothing is a style that does nothing", name)
+		}
+		// The map holds values, not pointers, so the filled-in type has to be
+		// written back — the loop variable is a copy.
+		c.ValueStyles[name] = style
+
+		rules := style.Rules
+		for i := range rules {
+			r := &rules[i]
+			r.Range = strings.TrimSpace(r.Range)
+			r.Prefix = strings.TrimSpace(r.Prefix)
+			r.Color = strings.TrimSpace(r.Color)
+			r.Description = strings.TrimSpace(r.Description)
+
+			// Exactly one matcher. Two on one rule would be an intersection
+			// nobody wrote deliberately, and silently honouring the first is
+			// how a config comes to mean something other than what it says.
+			matchers := 0
+			for _, set := range []bool{len(r.Value) > 0, r.Range != "", r.Prefix != "", r.Default} {
+				if set {
+					matchers++
+				}
+			}
+			switch {
+			case matchers == 0:
+				return fmt.Errorf("value_styles[%s].rules[%d]: no matcher; want one of value, range, prefix or default", name, i)
+			case matchers > 1:
+				return fmt.Errorf("value_styles[%s].rules[%d]: more than one of value, range, prefix and default; a rule matches one way", name, i)
+			}
+
+			// A default that is not last can never be reached past itself, so
+			// every rule after it is dead. Better said here than discovered.
+			if r.Default && i != len(rules)-1 {
+				return fmt.Errorf("value_styles[%s].rules[%d]: default has to be the last rule; the %d after it could never match",
+					name, i, len(rules)-1-i)
+			}
+
+			if r.Range != "" {
+				bounds, err := parseRange(r.Range)
+				if err != nil {
+					return fmt.Errorf("value_styles[%s].rules[%d]: range %q: %w", name, i, r.Range, err)
+				}
+				r.bounds = bounds
+			}
+
+			if r.Color == "" {
+				return fmt.Errorf("value_styles[%s].rules[%d]: no color; want one of %s", name, i, strings.Join(StyleColors, ", "))
+			}
+			if !slices.Contains(StyleColors, r.Color) {
+				return fmt.Errorf("value_styles[%s].rules[%d]: color %q is not one this UI can draw; want one of %s",
+					name, i, r.Color, strings.Join(StyleColors, ", "))
+			}
+		}
+	}
+	return nil
+}
+
+/* parseRange reads "200-399" into its bounds, inclusive, with either end
+ * allowed to be missing: "1000-" is a threshold upwards, "-100" one downwards.
+ *
+ * Deliberately unclever: numbers and a dash. Negative bounds would make the
+ * dash ambiguous, and a log value that is negative is not one anybody colours
+ * by band.
+ */
+func parseRange(s string) (RuleRange, error) {
+	var out RuleRange
+
+	before, after, found := strings.Cut(s, "-")
+	if !found {
+		return out, errors.New(`want a dash, as in "200-399", "1000-" or "-100"`)
+	}
+	before, after = strings.TrimSpace(before), strings.TrimSpace(after)
+	if before == "" && after == "" {
+		return out, errors.New("has no bounds at all; want a number on at least one side of the dash")
+	}
+
+	if before != "" {
+		lo, err := strconv.ParseFloat(before, 64)
+		if err != nil {
+			return out, fmt.Errorf("%q is not a number", before)
+		}
+		out.Lo, out.HasLo = lo, true
+	}
+	if after != "" {
+		hi, err := strconv.ParseFloat(after, 64)
+		if err != nil {
+			return out, fmt.Errorf("%q is not a number", after)
+		}
+		out.Hi, out.HasHi = hi, true
+	}
+	if out.HasLo && out.HasHi && out.Lo > out.Hi {
+		return out, fmt.Errorf("%v is above %v; the low bound comes first", out.Lo, out.Hi)
+	}
+	return out, nil
+}
+
+// setNames lists the defined styles, sorted, for the error a mistyped `style:`
+// produces — the answer to "then what IS there" belongs in the message.
+func setNames(sets map[string]ValueStyle) []string {
+	names := make([]string, 0, len(sets))
+	for name := range sets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func orNone(names []string) string {
+	if len(names) == 0 {
+		return "none are defined"
+	}
+	return strings.Join(names, ", ")
 }
 
 // firstBadIDRune reports the first character an id may not contain, or zero.

@@ -186,7 +186,7 @@ tools:
     tooltip: "Yeti Logs"
     icon: yeti
     query: "named_tags.system: yeti"
-  - id: api
+  - id: apilogs
     tooltip: "API Logs"
     icon: bolt
     query: "system: api"
@@ -200,7 +200,7 @@ tools:
 	}
 	// The id is configured, and the order is the file's — the first tool is
 	// what a request naming no tool gets, so both matter.
-	want := []string{"main", "yeti", "api"}
+	want := []string{"main", "yeti", "apilogs"}
 	for i, id := range want {
 		if cfg.Tools[i].ID != id {
 			t.Errorf("tools[%d].id = %q, want %q", i, cfg.Tools[i].ID, id)
@@ -219,7 +219,13 @@ func TestToolIDs(t *testing.T) {
 		"tools:\n  - tooltip: X\n    icon: gear\n":                           "id must be set",
 		"tools:\n  - id: a b\n    icon: gear\n":                              "use letters, digits",
 		"tools:\n  - id: api/logs\n    icon: gear\n":                         "use letters, digits",
-		"tools:\n  - id: api\n    icon: gear\n  - id: api\n    icon: bolt\n": "has to be unique",
+		"tools:\n  - id: sip\n    icon: gear\n  - id: sip\n    icon: bolt\n": "has to be unique",
+		// The id is a path segment now, so it cannot be one the server answers
+		// on itself: /api is the API and /healthz is the health check, and a
+		// tool living there would be a link that returns anything but the UI.
+		"tools:\n  - id: api\n    icon: gear\n":     `id "api" is a path this server already answers on`,
+		"tools:\n  - id: healthz\n    icon: gear\n": `id "healthz" is a path this server already answers on`,
+		"tools:\n  - id: assets\n    icon: gear\n":  `id "assets" is a path this server already answers on`,
 	}
 	for body, want := range cases {
 		t.Run(want, func(t *testing.T) {
@@ -331,13 +337,146 @@ tools:
 	}
 }
 
+/* Value styles: how a field's values are drawn, and which value gets which
+ * colour.
+ *
+ * Everything here is refused at startup rather than at render time — a colour
+ * the stylesheet does not have, or a range written backwards, would otherwise
+ * show up as an uncoloured value three screens into a result set. */
+func TestValueStyles(t *testing.T) {
+	cfg, err := config.Load(write(t, `
+value_styles:
+  http_status:
+    rules:
+      - {range: 200-399, color: ok}
+      - {range: 400-499, color: warn}
+      - {range: 500-599, color: error}
+  level:
+    type: tag
+    rules:
+      - {value: [error, fatal], color: error}
+      - {value: warn, color: warn}
+      - {prefix: "deb", color: muted}
+      - {default: true, color: neutral}
+  slow:
+    type: text
+    rules:
+      - {range: 1000-, color: error, description: over a second}
+      - {range: -999, color: ok}
+
+tools:
+  - id: web
+    tooltip: Web
+    icon: globe
+    fields:
+      - _time
+      - {name: payload.status, label: status, style: http_status}
+      - {name: duration, style: slow}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Tools[0].Fields[1].Style != "http_status" {
+		t.Errorf("fields[1].style = %q", cfg.Tools[0].Fields[1].Style)
+	}
+	// A style that does not say how it draws gets the pill, filled in here so
+	// the UI never has to know what the default is.
+	if got := cfg.ValueStyles["http_status"].Type; got != config.StyleTag {
+		t.Errorf("http_status.type = %q, want %q", got, config.StyleTag)
+	}
+	if got := cfg.ValueStyles["slow"].Type; got != config.StyleText {
+		t.Errorf("slow.type = %q, want %q", got, config.StyleText)
+	}
+
+	if b, ok := cfg.ValueStyles["http_status"].Rules[1].Bounds(); !ok || b.Lo != 400 || b.Hi != 499 {
+		t.Errorf("http_status.rules[1] bounds = %+v (%v), want 400-499", b, ok)
+	}
+	// A single value does not have to be written as a list of one.
+	if got := cfg.ValueStyles["level"].Rules[1].Value; len(got) != 1 || got[0] != "warn" {
+		t.Errorf("level.rules[1].value = %v, want [warn]", got)
+	}
+	// A rule with no range has no bounds, rather than 0-0.
+	if _, ok := cfg.ValueStyles["level"].Rules[0].Bounds(); ok {
+		t.Error("a value rule reports bounds")
+	}
+
+	// The description rides along with the colour: what the value MEANS, which
+	// is the half a colour cannot carry.
+	if got := cfg.ValueStyles["slow"].Rules[0].Description; got != "over a second" {
+		t.Errorf("slow.rules[0].description = %q", got)
+	}
+	if got := cfg.ValueStyles["slow"].Rules[1].Description; got != "" {
+		t.Errorf("slow.rules[1].description = %q, want empty", got)
+	}
+
+	// A threshold: open at the top, because "slow past a second" has no upper
+	// bound and inventing one loses the colour on the day it is exceeded.
+	b, ok := cfg.ValueStyles["slow"].Rules[0].Bounds()
+	if !ok || !b.HasLo || b.Lo != 1000 || b.HasHi {
+		t.Errorf("slow.rules[0] bounds = %+v (%v), want 1000 and up", b, ok)
+	}
+	if b, _ := cfg.ValueStyles["slow"].Rules[1].Bounds(); b.HasLo || !b.HasHi || b.Hi != 999 {
+		t.Errorf("slow.rules[1] bounds = %+v, want up to 999", b)
+	}
+
+	head := "tools:\n  - id: x\n    icon: gear\n    fields: [{name: a, style: s}]\nvalue_styles:\n  s:\n    rules:\n      - "
+	cases := map[string]string{
+		`{value: "200", color: chartreuse}`:      "not one this UI can draw",
+		`{value: "200"}`:                         "no color",
+		`{color: ok}`:                            "no matcher",
+		`{value: "200", prefix: "2", color: ok}`: "more than one",
+		`{range: 599-500, color: ok}`:            "the low bound comes first",
+		`{range: 2xx-3xx, color: ok}`:            "is not a number",
+		`{range: "200", color: ok}`:              "want a dash",
+		`{range: "-", color: ok}`:                "no bounds at all",
+	}
+	for rule, want := range cases {
+		t.Run(want, func(t *testing.T) {
+			_, err := config.Load(write(t, head+rule+"\n"))
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to mention %q", err, want)
+			}
+		})
+	}
+
+	// A type this UI cannot draw.
+	if _, err := config.Load(write(t, "value_styles:\n  s:\n    type: pill\n    rules: [{default: true, color: ok}]\n")); err == nil ||
+		!strings.Contains(err.Error(), `type is "pill"`) {
+		t.Errorf("error = %v, want it to refuse an unknown type", err)
+	}
+
+	// A style with no rules draws nothing, which is not what anybody meant by
+	// naming it on a field.
+	if _, err := config.Load(write(t, "value_styles:\n  s:\n    type: text\n")); err == nil ||
+		!strings.Contains(err.Error(), "no rules") {
+		t.Errorf("error = %v, want it to refuse a style with no rules", err)
+	}
+
+	// A default that is not last leaves every rule after it dead.
+	_, err = config.Load(write(t, "value_styles:\n  s:\n    rules:\n      - {default: true, color: ok}\n      - {value: x, color: warn}\n"))
+	if err == nil || !strings.Contains(err.Error(), "default has to be the last rule") {
+		t.Errorf("error = %v, want it to refuse a default that is not last", err)
+	}
+
+	// A field naming a style that does not exist, with the ones that do in the
+	// message — the answer to "then what is there" belongs in the error.
+	_, err = config.Load(write(t, "value_styles:\n  http_status:\n    rules: [{default: true, color: ok}]\ntools:\n  - id: x\n    icon: gear\n    fields: [{name: a, style: htpp_status}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "not in value_styles (http_status)") {
+		t.Errorf("error = %v, want it to name the styles that exist", err)
+	}
+}
+
 func TestToolLetters(t *testing.T) {
 	cfg, err := config.Load(write(t, `
 tools:
   - id: all
     tooltip: Everything
     icon: globe
-  - id: api
+  - id: apilogs
     tooltip: API Logs
     letters: API
     query: 'system: api'
@@ -422,7 +561,7 @@ func TestToolFieldValidation(t *testing.T) {
 	cases := map[string]string{
 		// A typo in a key is otherwise a silent no-op: the label simply never
 		// appears and nothing says why.
-		"tools:\n  - id: x\n    icon: gear\n    fields:\n      - {name: a, lable: b}\n": "want name or label",
+		"tools:\n  - id: x\n    icon: gear\n    fields:\n      - {name: a, lable: b}\n": "want name, label or style",
 		"tools:\n  - id: x\n    icon: gear\n    fields:\n      - {label: nameless}\n":   "has no name",
 		"tools:\n  - id: x\n    icon: gear\n    fields:\n      - [a, b]\n":              "either a name or",
 	}
