@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -284,6 +285,66 @@ func TestTailDeliversSSE(t *testing.T) {
 	// which reads as a broken tail.
 	if f.lastForm.Get("start_offset") == "" {
 		t.Error("tail must backfill by default")
+	}
+}
+
+/* The backfill is trimmed HERE, to the caller's row cap.
+ *
+ * Otherwise "follow this, starting from the hour I was looking at" is a request
+ * for every line of that hour, sent to a browser that keeps the newest few
+ * hundred and drops the rest on the floor. */
+func TestTailTrimsTheBackfillToTheRowCap(t *testing.T) {
+	old := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+
+	f := newFakeVL(t, func(w http.ResponseWriter, r *http.Request) {
+		// Ten rows of history, oldest first, then one live row.
+		for i := range 10 {
+			fmt.Fprintf(w, `{"_time":%q,"_msg":"history %d"}`+"\n", old, i)
+		}
+		fmt.Fprintf(w, `{"_time":%q,"_msg":"live"}`+"\n",
+			time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano))
+	})
+
+	h := testServer(t, f.URL, func(c *config.Config) { c.VictoriaLogs.MaxRows = 5000 })
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, get("/tail", url.Values{"query": {"error"}, "limit": {"3"}}))
+
+	body := rec.Body.String()
+
+	// The newest three of the history, and none of the older seven.
+	for _, want := range []string{"history 7", "history 8", "history 9", "live"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+	for _, gone := range []string{"history 0", "history 6"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("%q should have been trimmed from the backfill:\n%s", gone, body)
+		}
+	}
+	// Order is preserved: history first, oldest of the kept rows first, then
+	// what arrived live.
+	if i, j := strings.Index(body, "history 7"), strings.Index(body, "history 9"); i > j {
+		t.Error("the kept history came out in the wrong order")
+	}
+	if strings.Index(body, "live") < strings.Index(body, "history 9") {
+		t.Error("the live row came out before the history")
+	}
+}
+
+// A row this process cannot read a timestamp out of is a row the browser still
+// gets: showing too much beats silently holding it back.
+func TestTailPassesRowsWithoutATimestamp(t *testing.T) {
+	f := newFakeVL(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"_msg":"no timestamp here"}` + "\n"))
+	})
+
+	h := testServer(t, f.URL, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, get("/tail", url.Values{"query": {"error"}}))
+
+	if !strings.Contains(rec.Body.String(), "no timestamp here") {
+		t.Errorf("row was dropped:\n%s", rec.Body.String())
 	}
 }
 

@@ -67,6 +67,11 @@ victorialogs:
   # browser reconnects by itself, so nobody sees the seam; this only stops a tab
   # left open over a weekend from pinning an upstream stream open for the
   # weekend.
+  #
+  # How much HISTORY a tail opens with is not configured here: the UI sends the
+  # window it is showing, and the server trims that history to the row cap
+  # before it reaches the browser. So "follow this, from the hour I was looking
+  # at" costs the same on a busy stream as on a quiet one.
   tail_max_duration: 1h
 
 # OIDC. Any conformant provider: Keycloak, Authentik, Okta, Entra, Google, or
