@@ -133,7 +133,10 @@ const columnWidths = computed<number[]>(() => {
     //
     let widest = 0
     for (const row of sample) {
-      const len = cell(row, column).length
+      // A row with more lines carries a "+N" after its first one, and the
+      // column has to hold both or the badge is what gets ellipsized.
+      const extra = extraLines(row, column)
+      const len = cell(row, column).length + (extra ? String(extra).length + 3 : 0)
       if (len > widest) widest = len
     }
     // Only a pill is wider than its text; colouring the text costs nothing.
@@ -212,7 +215,27 @@ function cell(row: LogRow, column: string): string {
   // Any other field that carries an instant is shown in the same zone: two
   // timestamps side by side on one row must be on one clock, or comparing them
   // is a trap.
-  return formatIfInstant(raw) ?? raw
+  const shown = formatIfInstant(raw) ?? raw
+
+  // The FIRST line, where a value has more than one — a job's captured stdout,
+  // a backtrace. A row is one line tall and every row is the same height, so
+  // the rest cannot be drawn here; what is drawn is what the column is measured
+  // from, and the count of what was left out is beside it.
+  const br = shown.indexOf('\n')
+  return br < 0 ? shown : shown.slice(0, br).replace(/\r$/, '')
+}
+
+/* How many lines a value has beyond the first, for the "+N" beside it.
+ *
+ * Trailing blank lines are not lines anybody wants counted: a message that ends
+ * in a newline is one line, not two. */
+function extraLines(row: LogRow, column: string): number {
+  const raw = row[column]
+  if (!raw || raw.indexOf('\n') < 0) return 0
+
+  const lines = raw.split('\n')
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop()
+  return Math.max(0, lines.length - 1)
 }
 
 /* What each header shows: the configured label, or — failing that — the field
@@ -272,10 +295,22 @@ function cellTitle(row: LogRow, column: string): string {
   if (raw === undefined) return ''
 
   const shown = cell(row, column)
-  const title = shown === raw ? raw : `${shown}  (${raw})`
+  // A multi-line value is shown whole rather than as "first line (whole
+  // thing)", which would print it twice — capped, because a sixty-line tooltip
+  // is a screen of text the pointer is holding hostage. The drawer has all of
+  // it, and that is what the count is pointing at.
+  const title = raw.includes('\n') ? capLines(raw) : shown === raw ? raw : `${shown}  (${raw})`
 
   const description = rule(row, column)?.description
   return description ? `${title}\n${description}` : title
+}
+
+const TOOLTIP_LINES = 12
+
+function capLines(raw: string): string {
+  const lines = raw.split('\n')
+  if (lines.length <= TOOLTIP_LINES) return raw
+  return `${lines.slice(0, TOOLTIP_LINES).join('\n')}\n… ${lines.length - TOOLTIP_LINES} more lines — open the row`
 }
 
 // The scroller's height is not known until it is laid out, and it changes with
@@ -330,6 +365,15 @@ function mounted(el: Element | null) {
               >{{ cell(row, c) }}</span
             >
             <template v-else>{{ cell(row, c) }}</template>
+            <!-- What the row could not show. Every row is the same height, so a
+                 value with more lines in it loses them here rather than growing
+                 the row; the count says so, and the row drawer has them. -->
+            <span
+              v-if="extraLines(row, c)"
+              class="more"
+              :title="`${extraLines(row, c) + 1} lines — open the row to see them all`"
+              >+{{ extraLines(row, c) }}</span
+            >
           </div>
         </div>
       </div>
@@ -350,7 +394,11 @@ function mounted(el: Element | null) {
 
 .head, .row {
   display: grid;
-  align-items: center;
+  /* stretch, not center: a grid item sized to its own content is what let a
+     multi-line value grow taller than its row and paint over the rows above and
+     below it. Stretched, every cell is exactly one row high and its own
+     overflow:hidden does the clipping. */
+  align-items: stretch;
   gap: 0;
 }
 
@@ -412,6 +460,19 @@ function mounted(el: Element | null) {
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: var(--row-height);
+}
+
+/* "+65": the lines this row is not showing. Dim and small — it is a footnote
+   about the value, not part of it — and it keeps its own width in the column so
+   the value beside it is not the thing that gets ellipsized. */
+.more {
+  margin-left: 6px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--hover);
+  vertical-align: 1px;
 }
 
 .empty { padding: 16px; }
