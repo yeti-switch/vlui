@@ -75,7 +75,9 @@ async function copyJSON() {
       <span>Log entry</span>
       <div class="spacer"></div>
       <button type="button" class="ghost" @click="copyJSON">{{ copied ? 'Copied' : 'Copy JSON' }}</button>
-      <button type="button" class="ghost" title="Close" @click="emit('close')">×</button>
+      <!-- The key is named on the button: a shortcut nobody is told about is a
+           shortcut nobody uses. -->
+      <button type="button" class="ghost" title="Close (Esc)" @click="emit('close')">×</button>
     </header>
 
     <dl>

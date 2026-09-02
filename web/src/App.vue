@@ -239,6 +239,9 @@ function toggleFacets() {
 
 const tailing = ref(false)
 
+// The word the status line blinks while following, one letter per span.
+const FOLLOWING = [...'following']
+
 let queryAbort: AbortController | undefined
 let hitsAbort: AbortController | undefined
 let facetsAbort: AbortController | undefined
@@ -489,6 +492,80 @@ function download() {
   URL.revokeObjectURL(url)
 }
 
+/* --- keyboard -------------------------------------------------------------- */
+
+/* What the keyboard does, in one place.
+ *
+ * Escape backs out of one layer at a time, innermost first: the log entry, then
+ * the field panel.
+ *
+ * One layer per press rather than everything at once, because a reader who
+ * opened a row from the panel wants the panel back when they close the row —
+ * and because a key that clears the whole screen is a key people stop trusting.
+ *
+ * Anything that has already dealt with the press is left alone: the query box
+ * closes its autocomplete on Escape and then clears itself, the field search
+ * and the timezone list close themselves, and all of them call preventDefault
+ * when they do. So the panels are what Escape reaches only once nothing nearer
+ * to the cursor wanted it. */
+function onKeydown(e: KeyboardEvent) {
+  if (e.defaultPrevented) return
+
+  if (e.key === 'Escape') {
+    if (selectedIndex.value >= 0) {
+      selectedIndex.value = -1
+      return
+    }
+    if (facetsOpen.value) toggleFacets()
+    return
+  }
+
+  /* The single-letter shortcuts: r runs, f shows the fields, l follows.
+   *
+   * Plain letters, so the first question is whether the reader meant to type
+   * one. Anything with a modifier belongs to the browser or the window manager,
+   * and anything typed into a box belongs to the box — a query with an r in it
+   * is not a request to re-run.
+   *
+   * preventDefault on the ones we take, because Firefox starts a find-as-you-
+   * type on a stray letter, and a search bar opening under the query line is a
+   * worse surprise than the shortcut is a convenience. */
+  if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return
+
+  // Nothing to run, follow or show until the app itself is up: the login gate
+  // and the icon sheet are pages of their own.
+  if (!cfg.value || signedOut.value || showIcons.value) return
+
+  switch (e.key.toLowerCase()) {
+    case 'r':
+      e.preventDefault()
+      run()
+      break
+    case 'f':
+      e.preventDefault()
+      toggleFacets()
+      break
+    case 'l':
+      e.preventDefault()
+      toggleTail()
+      break
+  }
+}
+
+// Whether the press belongs to something the reader is typing into. Covers the
+// query box, the row cap, the field search — and anything contenteditable, in
+// case one appears later.
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  if (!el || !el.tagName) return false
+  return (
+    el.tagName === 'INPUT' ||
+    el.tagName === 'TEXTAREA' ||
+    el.tagName === 'SELECT' ||
+    el.isContentEditable
+  )
+}
+
 /* --- shareable state ------------------------------------------------------ */
 
 /* The tool is the PATH; the query, the window and the row cap are the fragment.
@@ -655,6 +732,11 @@ function message(e: unknown): string {
 }
 
 onMounted(async () => {
+  // On the window rather than on a container: the reader may have focus on the
+  // rail, the table, a button, or nothing at all, and Escape means the same
+  // thing wherever they are.
+  window.addEventListener('keydown', onKeydown)
+
   try {
     const c = await fetchConfig()
     cfg.value = c
@@ -695,6 +777,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
   queryAbort?.abort()
   hitsAbort?.abort()
   facetsAbort?.abort()
@@ -754,7 +837,20 @@ onUnmounted(() => {
           <span>{{ rows.length.toLocaleString() }} rows</span>
           <span v-if="running">· running…</span>
           <span v-else-if="elapsedMs && !tailing">· {{ (elapsedMs / 1000).toFixed(2) }}s</span>
-          <span v-if="tailing" class="live">· following</span>
+          <!-- One letter at a time. The word is split so the dim can travel
+               along it: the same blink on every letter, started a fraction
+               later on each. Read as a whole by anything that is not looking at
+               it, hence the label. -->
+          <span v-if="tailing" class="live" role="status" aria-label="following">
+            ·
+            <span
+              v-for="(ch, i) in FOLLOWING"
+              :key="i"
+              aria-hidden="true"
+              :style="{ animationDelay: `${(i * 0.108).toFixed(3)}s` }"
+              >{{ ch }}</span
+            >
+          </span>
           <span v-if="truncated" class="warn">
             · limited to {{ limit.toLocaleString() }} rows — narrow the query or raise the limit
           </span>
@@ -860,6 +956,49 @@ onUnmounted(() => {
 
 
 
-.live { color: var(--accent); }
+/* Following: blinking, because it is the one state of this table that changes
+   under the reader without them asking. Everything else on the status line is a
+   fact about a query that has finished; this is a note that what is on screen
+   is moving.
+   
+   The accent rather than a warning colour: following is a mode, not a problem,
+   and it is already the colour the Stop button turns while it is on.
+   
+   A hard on/off rather than a fade. A pulse between full and a quarter opacity
+   reads as a glow at this size — 11px of dim monospace — and the point of this
+   indicator is to be noticed from the corner of an eye.
+   
+   NOT disabled under prefers-reduced-motion, unlike the decoration elsewhere in
+   this app. This is a status, not an ornament: a desktop with animations turned
+   off is common — GNOME does it by default on some setups — and honouring it
+   here means the one thing that says "the table is moving" is the one thing
+   that does not move. Stopping it is the Stop button, one control away, which
+   is the mechanism that makes an indefinite blink fair. */
+.live {
+  color: var(--accent);
+}
+
+/* The animation is on the LETTERS, each started 108ms after the one before, so
+   what travels along the word is a single dim rather than the whole word going
+   out at once. Nine letters at that spacing is a wave that crosses in under a
+   second, then a second and a half of nothing before the next one. */
+.live span {
+  animation: blink 2.4s step-end infinite;
+}
+
+/* Mostly on, by a long way: the dim phase is one letter-width of the cycle, and
+   a word that spends as long absent as present is a word you end up waiting to
+   read. */
+@keyframes blink {
+  0%,
+  90% {
+    opacity: 1;
+  }
+  91%,
+  100% {
+    opacity: 0.15;
+  }
+}
+
 .warn { color: var(--warn); }
 </style>

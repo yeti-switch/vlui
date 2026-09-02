@@ -293,15 +293,24 @@ function usePreset(p: Preset) {
       </label>
 
       <button v-if="running" type="button" @click="emit('cancel')">Cancel</button>
-      <button v-else type="button" class="primary" @click="emit('run')">Run</button>
+      <!-- The key on the button, not only in the tooltip: a shortcut nobody can
+           see is a shortcut nobody uses, and these two are the ones worth
+           learning. -->
+      <button v-else type="button" class="primary" title="Run the query (R)" @click="emit('run')">
+        Run<kbd>R</kbd>
+      </button>
 
+      <!-- The same button stops it, which is what the square and the changed
+           colour are saying. Spelled out in the label as well while it is
+           running: a control that only LOOKS different is one people click
+           twice to find out. -->
       <button
         type="button"
         :class="{ tailing }"
-        :title="tailing ? 'Stop following' : 'Follow new logs as they arrive'"
+        :title="tailing ? 'Stop following (L)' : 'Follow new logs as they arrive (L)'"
         @click="emit('toggle-tail')"
       >
-        {{ tailing ? '■ Live' : '▶ Live' }}
+        {{ tailing ? '■ Stop' : '▶ Live' }}<kbd>L</kbd>
       </button>
 
       <div v-if="presets.length" class="presets">
@@ -482,6 +491,23 @@ button.tailing {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* The key that does the same thing as the click. Dim and small: it is a label
+   on the control, not part of what the control says, and it must not compete
+   with the word beside it. Sized in ems so it tracks the button's own text. */
+kbd {
+  margin-left: 6px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.8em;
+  line-height: 1;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  /* Against the button's own colour, so it works on the blue Run, on the tinted
+     Live and on a plain button without three rules saying so. */
+  color: inherit;
+  opacity: 0.8;
 }
 
 .presets { position: relative; }

@@ -22,9 +22,9 @@ jobs:
     name: SPA
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -40,7 +40,7 @@ jobs:
 
       # The Go build embeds web/dist, so hand it over rather than building the
       # SPA twice.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: web/dist
@@ -51,15 +51,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
       # go:embed fails outright without web/dist, so the SPA must land first.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: dist
           path: web/dist
@@ -154,7 +154,7 @@ jobs:
     name: Alert rules
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # The released binary rather than `go install`: prometheus/prometheus has
       # replace directives, which go install refuses.
@@ -177,7 +177,7 @@ jobs:
       # And that the copy the chart renders is the same set of rules, valid on
       # its own — a PrometheusRule Prometheus rejects takes every OTHER rule in
       # the file down with it.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v4.2.3
       - name: Check the chart's copy
@@ -197,11 +197,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v4.2.3
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -269,14 +269,36 @@ jobs:
                 --set config.auth.redirect_url=https://x/api/auth/callback \
                 --set config.auth.cookie_secret=tooshort
 
-      - uses: yannh/kubeconform-action@v1
-        with:
-          args: >-
-            -strict -summary
-            -kubernetes-version 1.31.0
-            -schema-location default
-            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+      # kubeconform from its own release rather than through an action.
+      #
+      # The action this used to call, yannh/kubeconform-action, does not exist —
+      # and an unresolvable action is not a failed STEP but a failed JOB: every
+      # action is resolved before the first one runs, so the continue-on-error
+      # below never got the chance to apply and this advisory check has been
+      # failing the chart job on every branch, in three seconds, at "Set up job".
+      #
+      # Rendered manifests, not the chart directory: the templates are Go
+      # templates, and not YAML until helm has been through them. The render with
+      # the CRDs switched on is the one worth validating — a PodMonitor or an
+      # HTTPRoute the API server would reject is exactly what this catches, and
+      # both need a parent and a hostname before they will render at all.
+      - name: Manifests must match the Kubernetes schemas
         continue-on-error: true
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
+            | tar -xz kubeconform
+
+          helm template t charts/vlui \
+            --set podMonitor.enabled=true \
+            --set httpRoute.enabled=true \
+            --set 'httpRoute.parentRefs[0].name=gw' \
+            --set 'httpRoute.hostnames[0]=logs.example.com' \
+            | ./kubeconform -strict -summary \
+                -kubernetes-version 1.31.0 \
+                -schema-location default \
+                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+                -
 
       # The one that catches the most: config.Load runs with KnownFields, so any
       # key the chart writes that the binary does not know is a CrashLoopBackOff
