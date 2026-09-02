@@ -85,13 +85,13 @@ watch(
   <aside class="facets" :class="{ closed: !open }">
     <!-- Closed, the panel is a rail rather than nothing at all: a sidebar that
          vanished entirely would leave no way back to it. -->
-    <button v-if="!open" type="button" class="rail" title="Show fields" @click="emit('toggle-panel')">
+    <button v-if="!open" type="button" class="rail" title="Show fields (F)" @click="emit('toggle-panel')">
       <span class="rail-text">▸ Fields</span>
     </button>
 
     <template v-else>
       <header>
-        <button type="button" class="ghost collapse" title="Hide fields" @click="emit('toggle-panel')">◂</button>
+        <button type="button" class="ghost collapse" title="Hide fields (F or Esc)" @click="emit('toggle-panel')">◂</button>
         <span>Fields</span>
         <span v-if="loading" class="muted">…</span>
 

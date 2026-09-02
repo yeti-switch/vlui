@@ -513,11 +513,11 @@ function mounted(el: Element | null) {
   }
 }
 
-/* Still turning, because a stopped spinner beside "Following…" reads as a hang
-   — just slowly enough not to be motion anybody objected to. */
+/* Slower where motion is unwelcome, but not so slow it reads as stopped: a
+   spinner that appears frozen beside "Querying…" says the app has hung. */
 @media (prefers-reduced-motion: reduce) {
   .spinner {
-    animation-duration: 2.4s;
+    animation-duration: 1.4s;
   }
 }
 </style>
