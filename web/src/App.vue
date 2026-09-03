@@ -239,8 +239,27 @@ function toggleFacets() {
 
 const tailing = ref(false)
 
-// The word the status line blinks while following, one letter per span.
-const FOLLOWING = [...'following']
+/* Following, but nothing has arrived down the stream yet.
+ *
+ * The status line says "connecting" while this holds and "following" after, so
+ * the one place that reports the state of the tail reports all of it — the
+ * table underneath stays empty and says nothing, because an empty table with a
+ * spinner in it was two things saying the same thing in different words.
+ *
+ * Cleared by the first row, or by a few seconds passing: a stream with nothing
+ * to say is still connected, and claiming otherwise for as long as a quiet
+ * system stays quiet would be the same lie in the other direction. */
+const tailConnecting = ref(false)
+let connectTimer: number | undefined
+
+const CONNECT_GRACE = 3000
+
+// The word the status line blinks, one letter per span.
+const tailWord = computed(() => [...(tailConnecting.value ? 'connecting' : 'following')])
+
+// How far apart the letters start, in seconds. The same wave in both states;
+// what differs is how often it runs (see .live.connecting).
+const LETTER_DELAY = 0.108
 
 let queryAbort: AbortController | undefined
 let hitsAbort: AbortController | undefined
@@ -368,6 +387,8 @@ function toggleTail() {
   facets.value = []
   shownRange.value = null
   tailing.value = true
+  tailConnecting.value = true
+  connectTimer = window.setTimeout(() => (tailConnecting.value = false), CONNECT_GRACE)
   writeURL()
 
   /* The window the picker is showing, as how much history to open with.
@@ -380,6 +401,7 @@ function toggleTail() {
 
   tailSource = openTail(query.value, activeTool.value, { limit: limit.value, backfillSeconds }, {
     onRow: (row) => {
+      tailConnecting.value = false
       tailBuffer.push(row)
     },
     onError: (m) => {
@@ -414,6 +436,9 @@ function flushTail() {
 
 function stopTail() {
   tailing.value = false
+  tailConnecting.value = false
+  window.clearTimeout(connectTimer)
+  connectTimer = undefined
   tailSource?.close()
   tailSource = undefined
   window.clearInterval(tailTimer)
@@ -841,13 +866,18 @@ onUnmounted(() => {
                along it: the same blink on every letter, started a fraction
                later on each. Read as a whole by anything that is not looking at
                it, hence the label. -->
-          <span v-if="tailing" class="live" role="status" aria-label="following">
+          <span
+            v-if="tailing"
+            class="live"
+            role="status"
+            :aria-label="tailConnecting ? 'connecting' : 'following'"
+          >
             ·
             <span
-              v-for="(ch, i) in FOLLOWING"
+              v-for="(ch, i) in tailWord"
               :key="i"
               aria-hidden="true"
-              :style="{ animationDelay: `${(i * 0.108).toFixed(3)}s` }"
+              :style="{ animationDelay: `${(i * LETTER_DELAY).toFixed(3)}s` }"
               >{{ ch }}</span
             >
           </span>
@@ -978,25 +1008,33 @@ onUnmounted(() => {
   color: var(--accent);
 }
 
-/* The animation is on the LETTERS, each started 108ms after the one before, so
-   what travels along the word is a single dim rather than the whole word going
-   out at once. Nine letters at that spacing is a wave that crosses in under a
-   second, then a second and a half of nothing before the next one. */
+/* The animation is on the LETTERS, each started a fraction after the one
+   before, so what travels along the word is a single dim rather than the whole
+   word going out at once. Nine letters at 108ms is a wave that crosses in under
+   a second, then a second and a half of nothing before the next one.
+   
+   One cycle for both words: connecting and following differ in what they say,
+   not in how they say it. */
 .live span {
   animation: blink 2.4s step-end infinite;
 }
 
-/* Mostly on, by a long way: the dim phase is one letter-width of the cycle, and
-   a word that spends as long absent as present is a word you end up waiting to
-   read. */
+/* The dim comes FIRST, and this matters more than it looks: with it at the end
+   of the cycle every letter sat lit for over two seconds before its first
+   blink, so clicking Live bought a long wait before anything moved. Starting
+   dim, the first letter is already blinking on the frame the word appears, and
+   the wave runs from there.
+   
+   Mostly on, by a long way: the dim phase is a tenth of the cycle, and a word
+   that spends as long absent as present is a word you end up waiting to read. */
 @keyframes blink {
   0%,
-  90% {
-    opacity: 1;
-  }
-  91%,
-  100% {
+  9% {
     opacity: 0.15;
+  }
+  10%,
+  100% {
+    opacity: 1;
   }
 }
 

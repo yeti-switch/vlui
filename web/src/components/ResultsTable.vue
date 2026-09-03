@@ -383,13 +383,16 @@ function mounted(el: Element | null) {
       </div>
     </div>
 
-    <!-- Three states, and only one of them is "there is nothing here". A query
-         in flight and a tail waiting for its first line both spin: the pane is
-         going to fill, and saying otherwise for a second and a half reads as an
-         answer rather than as a wait. -->
-    <p v-if="rows.length" class="none"></p>
+    <!-- A query in flight spins, because the pane is going to fill and saying
+         "No logs matched" in the meantime would be an answer rather than a
+         wait.
+         
+         A tail says nothing HERE. The status line above already reports it, and
+         blinks while it does; a spinner and a word in the middle of the table
+         were the same news told twice, in two places, in different words. An
+         empty table under "connecting" is not ambiguous. -->
+    <p v-if="rows.length || tailing" class="none"></p>
     <p v-else-if="running" class="empty muted"><span class="spinner"></span>Querying…</p>
-    <p v-else-if="tailing" class="empty muted"><span class="spinner"></span>Following…</p>
     <p v-else class="empty muted">No logs matched.</p>
   </div>
 </template>
