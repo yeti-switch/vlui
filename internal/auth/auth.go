@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -26,6 +27,18 @@ type Auth struct {
 	base string
 	log  *slog.Logger
 
+	// Every call to the IdP goes through this one, so cfg.Timeout bounds all of
+	// them rather than each caller remembering to.
+	http *http.Client
+
+	/* What discovery produces, and what therefore may not be there yet.
+	 *
+	 * Guarded because it is written by the background discovery goroutine and
+	 * read by request handlers. An RWMutex rather than an atomic: three fields
+	 * become valid together, and a login that read a new endpoint with an old
+	 * verifier would be a bug nobody could reproduce.
+	 */
+	mu       sync.RWMutex
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
 	// logoutURL is the provider's RP-initiated logout endpoint, when it has one.
@@ -34,9 +47,25 @@ type Auth struct {
 
 type ctxKey struct{}
 
-// New sets up OIDC. It talks to the issuer, so it can fail when the IdP is
-// unreachable — which is deliberate: starting with authentication silently
-// broken would serve every log line to anyone.
+/* New sets up OIDC without talking to the issuer.
+ *
+ * Discovery runs in the background and retries until it succeeds. It used to
+ * run here, and a failure stopped the process: the reasoning was that starting
+ * with authentication silently broken would serve every log line to anyone.
+ * That reasoning was wrong in one direction and right in the other.
+ *
+ * It is right that nothing may be served unauthenticated. That is not what
+ * discovery decides: sessions are verified against the cookie signature on
+ * every request, so an app that has never reached its IdP still refuses
+ * everyone who has no valid session. What discovery gates is signing IN.
+ *
+ * It is wrong that the process should die for it. An IdP that is unreachable
+ * for a minute took the whole deployment down with it — the pod never bound its
+ * port, the startup probe found nothing, and every reader with a valid session
+ * lost the logs they were reading over somebody else's outage. Now the app
+ * starts, existing sessions carry on, new logins answer 503 with the reason,
+ * and the moment the IdP answers, logins work again with no restart.
+ */
 func New(ctx context.Context, cfg Config, base string, log *slog.Logger) (*Auth, error) {
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
@@ -53,46 +82,136 @@ func New(ctx context.Context, cfg Config, base string, log *slog.Logger) (*Auth,
 			"fix", "set auth.cookie_secret to a value of at least 32 bytes: openssl rand -hex 32")
 	}
 
-	a := &Auth{cfg: cfg, base: base, log: log}
-
-	var endpoint oauth2.Endpoint
+	a := &Auth{cfg: cfg, base: base, log: log, http: &http.Client{Timeout: cfg.Timeout}}
 
 	if cfg.AuthURL != "" {
 		// Endpoints given by hand: for a provider with no discovery document.
-		endpoint = oauth2.Endpoint{AuthURL: cfg.AuthURL, TokenURL: cfg.TokenURL}
+		// Nothing to discover, so this path is ready before it returns —
+		// NewRemoteKeySet fetches the keys lazily, on the first verification.
 		if cfg.JWKSURL == "" {
 			return nil, errors.New("auth: jwks_url is required when endpoints are configured by hand")
 		}
-		ks := oidc.NewRemoteKeySet(ctx, cfg.JWKSURL)
-		a.verifier = oidc.NewVerifier(cfg.Issuer, ks, &oidc.Config{ClientID: cfg.ClientID})
-	} else {
-		// The normal path: everything from /.well-known/openid-configuration.
-		provider, err := oidc.NewProvider(ctx, cfg.Issuer)
-		if err != nil {
-			return nil, fmt.Errorf("auth: OIDC discovery on %s: %w", cfg.Issuer, err)
-		}
-		endpoint = provider.Endpoint()
-		a.verifier = provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})
+		ks := oidc.NewRemoteKeySet(a.clientContext(ctx), cfg.JWKSURL)
+		a.setProvider(
+			oauth2.Endpoint{AuthURL: cfg.AuthURL, TokenURL: cfg.TokenURL},
+			oidc.NewVerifier(cfg.Issuer, ks, &oidc.Config{ClientID: cfg.ClientID}),
+			"",
+		)
+		log.Info("OIDC configured from the endpoints in the config", "issuer", cfg.Issuer, "client_id", cfg.ClientID)
+		return a, nil
+	}
 
-		// end_session_endpoint is optional, and not part of the core struct.
-		var extra struct {
-			EndSession string `json:"end_session_endpoint"`
+	go a.discover(ctx)
+	return a, nil
+}
+
+// The interval between discovery attempts, doubling from the first to the
+// second: often enough that an IdP coming up is picked up promptly, rare enough
+// that an IdP that is gone for the weekend does not fill the log.
+const (
+	discoveryRetryMin = 2 * time.Second
+	discoveryRetryMax = 30 * time.Second
+)
+
+// discover fetches the discovery document until it gets one, and then stops.
+// Until it does, signing in answers 503; everything else is unaffected.
+func (a *Auth) discover(ctx context.Context) {
+	wait := discoveryRetryMin
+
+	for {
+		err := a.tryDiscover(ctx)
+		if err == nil {
+			a.log.Info("OIDC configured", "issuer", a.cfg.Issuer, "client_id", a.cfg.ClientID)
+			return
 		}
-		if err := provider.Claims(&extra); err == nil {
-			a.logoutURL = extra.EndSession
+		if ctx.Err() != nil {
+			return
+		}
+
+		a.log.Warn("OIDC discovery failed; signing in is unavailable until it succeeds",
+			"issuer", a.cfg.Issuer, "retry_in", wait, "err", err)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		if wait *= 2; wait > discoveryRetryMax {
+			wait = discoveryRetryMax
 		}
 	}
+}
+
+func (a *Auth) tryDiscover(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(a.clientContext(ctx), a.cfg.Timeout)
+	defer cancel()
+
+	provider, err := oidc.NewProvider(ctx, a.cfg.Issuer)
+	if err != nil {
+		return fmt.Errorf("OIDC discovery on %s: %w", a.cfg.Issuer, err)
+	}
+
+	// end_session_endpoint is optional, and not part of the core struct.
+	var extra struct {
+		EndSession string `json:"end_session_endpoint"`
+	}
+	logout := ""
+	if err := provider.Claims(&extra); err == nil {
+		logout = extra.EndSession
+	}
+
+	a.setProvider(provider.Endpoint(), provider.Verifier(&oidc.Config{ClientID: a.cfg.ClientID}), logout)
+	return nil
+}
+
+func (a *Auth) setProvider(endpoint oauth2.Endpoint, verifier *oidc.IDTokenVerifier, logoutURL string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
 	a.oauth = &oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		RedirectURL:  cfg.RedirectURL,
+		ClientID:     a.cfg.ClientID,
+		ClientSecret: a.cfg.ClientSecret,
+		RedirectURL:  a.cfg.RedirectURL,
 		Endpoint:     endpoint,
-		Scopes:       cfg.Scopes,
+		Scopes:       a.cfg.Scopes,
 	}
+	a.verifier = verifier
+	a.logoutURL = logoutURL
+}
 
-	log.Info("OIDC configured", "issuer", cfg.Issuer, "client_id", cfg.ClientID)
-	return a, nil
+// provider returns what discovery produced, and whether it has happened yet.
+func (a *Auth) provider() (*oauth2.Config, *oidc.IDTokenVerifier, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.oauth, a.verifier, a.oauth != nil
+}
+
+// Ready reports whether signing in is possible — that is, whether the IdP has
+// answered at least once.
+func (a *Auth) Ready() bool {
+	_, _, ok := a.provider()
+	return ok
+}
+
+// clientContext puts this app's bounded HTTP client where go-oidc and oauth2
+// both look for one, so cfg.Timeout applies to discovery, to the JWKS fetch and
+// to the token exchange alike.
+func (a *Auth) clientContext(ctx context.Context) context.Context {
+	return oidc.ClientContext(ctx, a.http)
+}
+
+// notReady answers a request that needs an IdP this process has not reached.
+//
+// 503 rather than 500: it is the state of something else, it is temporary, and
+// it says so — including to a browser that lands here from the login gate.
+func (a *Auth) notReady(w http.ResponseWriter, r *http.Request) {
+	a.log.Warn("refused: the IdP has not answered discovery yet",
+		"path", r.URL.Path, "issuer", a.cfg.Issuer, "request_id", middleware.GetReqID(r.Context()))
+
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"error": "the identity provider is not reachable, so signing in is not possible yet — " +
+			"this will clear by itself when it answers; sessions already signed in are unaffected",
+	})
 }
 
 // Routes are the auth endpoints. They are mounted inside /api but must stay
@@ -117,6 +236,12 @@ type flow struct {
 }
 
 func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
+	oauth, _, ok := a.provider()
+	if !ok {
+		a.notReady(w, r)
+		return
+	}
+
 	f := flow{
 		State:    randString(),
 		Nonce:    randString(),
@@ -136,7 +261,7 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 
 	// PKCE even though this is a confidential client: it costs nothing and it
 	// closes code interception if the redirect ever leaks.
-	url := a.oauth.AuthCodeURL(f.State,
+	url := oauth.AuthCodeURL(f.State,
 		oidc.Nonce(f.Nonce),
 		oauth2.S256ChallengeOption(f.Verifier),
 	)
@@ -144,6 +269,14 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
+	oauth, verifier, ok := a.provider()
+	if !ok {
+		// Reachable in one narrow case: discovery worked, the reader was sent
+		// to the IdP, and this process was restarted before they came back.
+		a.notReady(w, r)
+		return
+	}
+
 	if e := r.URL.Query().Get("error"); e != "" {
 		a.fail(w, r, http.StatusForbidden,
 			fmt.Errorf("provider refused: %s: %s", e, r.URL.Query().Get("error_description")))
@@ -168,7 +301,11 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := a.oauth.Exchange(r.Context(), r.URL.Query().Get("code"),
+	// The bounded client, so a provider that accepts the connection and then
+	// says nothing costs cfg.Timeout rather than the reader's afternoon.
+	ctx := a.clientContext(r.Context())
+
+	token, err := oauth.Exchange(ctx, r.URL.Query().Get("code"),
 		oauth2.VerifierOption(f.Verifier))
 	if err != nil {
 		a.fail(w, r, http.StatusInternalServerError, fmt.Errorf("token exchange: %w", err))
@@ -185,7 +322,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idToken, err := a.verifier.Verify(r.Context(), raw)
+	idToken, err := verifier.Verify(ctx, raw)
 	if err != nil {
 		a.fail(w, r, http.StatusForbidden, fmt.Errorf("id_token: %w", err))
 		return
@@ -301,8 +438,12 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 
 	out := map[string]string{}
 
-	if a.cfg.Logout == LogoutProvider && a.logoutURL != "" && hadSession {
-		u, err := url.Parse(a.logoutURL)
+	a.mu.RLock()
+	logoutURL := a.logoutURL
+	a.mu.RUnlock()
+
+	if a.cfg.Logout == LogoutProvider && logoutURL != "" && hadSession {
+		u, err := url.Parse(logoutURL)
 		if err == nil {
 			q := u.Query()
 			// id_token_hint tells the provider whose session to end. Most

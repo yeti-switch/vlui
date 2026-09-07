@@ -62,6 +62,21 @@ func run() error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
+	/* The first thing out, before anything that can fail, block or take its
+	 * time.
+	 *
+	 * A process that has said nothing is indistinguishable from one that never
+	 * ran: an image that did not exec, a config file that is not there, an IdP
+	 * that swallowed the discovery request and left the startup probe to find a
+	 * closed port. Every one of those looks like an empty log, and the first
+	 * question of every investigation is "did it start, and which build is it".
+	 * One line answers both, and costs one line.
+	 *
+	 * Deliberately after the -version branch, which is a question rather than a
+	 * start, and deliberately before config.Load: a config that cannot be read
+	 * is exactly the case where knowing the binary got this far matters. */
+	log.Info("vlui starting", "version", version, "commit", commit, "config", *configPath, "pid", os.Getpid())
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
@@ -118,9 +133,10 @@ func run() error {
 	// Nil when disabled, which every consumer reads as "everyone is anonymous".
 	var a *auth.Auth
 	if cfg.Auth.Enabled {
-		// Talks to the IdP, so it can fail when the provider is unreachable.
-		// That is deliberate: starting with authentication silently broken
-		// would serve every log line to anyone who asked.
+		// Does NOT talk to the IdP: discovery runs in the background and
+		// retries, so an unreachable provider delays signing in rather than
+		// starting. It still fails here on a configuration this process cannot
+		// use at all — those are not going to fix themselves.
 		a, err = auth.New(ctx, cfg.Auth, cfg.BasePath, log)
 		if err != nil {
 			return err
