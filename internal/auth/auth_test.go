@@ -740,3 +740,127 @@ func TestShortCookieSecretIsStillRefused(t *testing.T) {
 		t.Errorf("error does not mention the generated option: %v", err)
 	}
 }
+
+/* Discovery is a background job, and the app runs without it.
+ *
+ * The failure this prevents: an IdP that is unreachable for a minute used to
+ * take the whole deployment down — the process exited, the pod never bound its
+ * port, and every reader with a valid session lost the logs they were reading
+ * over somebody else's outage.
+ */
+func TestStartsWithAnUnreachableIdP(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		// Routable to nothing: the connection attempt hangs rather than being
+		// refused, which is the case that used to block startup for minutes.
+		Issuer:       "https://10.255.255.1",
+		ClientID:     "vlui",
+		RedirectURL:  "https://logs.example/api/auth/callback",
+		CookieSecret: strings.Repeat("k", 32),
+		Timeout:      200 * time.Millisecond,
+	}
+
+	started := time.Now()
+	a, err := New(t.Context(), cfg, "", slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("New must not fail because the IdP is unreachable: %v", err)
+	}
+	if took := time.Since(started); took > time.Second {
+		t.Errorf("New blocked for %s; discovery is supposed to run in the background", took)
+	}
+	if a.Ready() {
+		t.Error("Ready() is true, but nothing has answered discovery")
+	}
+
+	// Signing in is what is unavailable — and it says so, rather than 500ing.
+	rec := httptest.NewRecorder()
+	a.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/login", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("login status = %d, want 503: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not reachable") {
+		t.Errorf("the 503 does not say why: %s", rec.Body.String())
+	}
+
+	// And a session signed before the outage is still a session: the middleware
+	// checks the cookie, which owes nothing to the IdP.
+	tok, err := a.encode(session{User: User{Subject: "u-1"}, Expires: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	// a.cfg, not cfg: New applies the defaults to its own copy, and the cookie
+	// name is one of them.
+	req.AddCookie(&http.Cookie{Name: a.cfg.CookieName, Value: tok})
+	rec = httptest.NewRecorder()
+
+	admitted := false
+	a.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { admitted = true })).ServeHTTP(rec, req)
+	if !admitted {
+		t.Errorf("an existing session was refused while the IdP was down: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// And when the IdP answers, logins start working with no restart.
+func TestDiscoveryCatchesUpInTheBackground(t *testing.T) {
+	idp := fakeProvider(t)
+
+	cfg := Config{
+		Enabled:      true,
+		Issuer:       idp,
+		ClientID:     "vlui",
+		RedirectURL:  "https://logs.example/api/auth/callback",
+		CookieSecret: strings.Repeat("k", 32),
+	}
+	a, err := New(t.Context(), cfg, "", slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !a.Ready() {
+		if time.Now().After(deadline) {
+			t.Fatal("discovery never completed against a provider that answers")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	rec := httptest.NewRecorder()
+	a.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/login", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("login status = %d, want a redirect to the IdP: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); !strings.HasPrefix(got, idp+"/authorize") {
+		t.Errorf("login redirected to %q, want the discovered authorize endpoint", got)
+	}
+}
+
+// The timeout is the point: without one, a provider that accepts the connection
+// and then says nothing holds the call for as long as the kernel allows.
+func TestDiscoveryIsBounded(t *testing.T) {
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-blocked // never answers
+	}))
+	// Ordering matters, and LIFO is what gives it: the handler has to be
+	// released before Close, which waits for requests still in flight.
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(blocked) })
+
+	a := &Auth{
+		cfg:  Config{Issuer: srv.URL, ClientID: "vlui", Timeout: 200 * time.Millisecond},
+		log:  slog.New(slog.DiscardHandler),
+		http: &http.Client{Timeout: 200 * time.Millisecond},
+	}
+
+	started := time.Now()
+	err := a.tryDiscover(t.Context())
+	took := time.Since(started)
+
+	if err == nil {
+		t.Fatal("want an error from a provider that never answers")
+	}
+	if took > 2*time.Second {
+		t.Errorf("discovery took %s against an unanswering provider; the timeout is not being applied", took)
+	}
+}

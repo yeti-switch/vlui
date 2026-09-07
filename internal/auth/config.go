@@ -41,6 +41,17 @@ type Config struct {
 	JWKSURL     string `yaml:"jwks_url"`
 	UserInfoURL string `yaml:"userinfo_url"`
 
+	// Timeout bounds every request this process makes to the IdP: the discovery
+	// document, the JWKS fetch, the token exchange.
+	//
+	// It exists because the default is no timeout at all — an IdP that accepts
+	// the connection and never answers, or an address that swallows the SYN,
+	// leaves the call hanging on the kernel's own retry limit, which is over
+	// two minutes. Ten seconds is generous for a document a provider serves
+	// from memory, and short enough that a broken one is a log line rather than
+	// a stall.
+	Timeout time.Duration `yaml:"timeout"`
+
 	// CookieSecret signs the session cookie. At least 32 bytes. Rotating it
 	// logs everyone out, which is also how you revoke every session at once.
 	//
@@ -138,6 +149,9 @@ func (c *Config) applyDefaults() {
 	if c.SecureCookie == nil {
 		t := true
 		c.SecureCookie = &t
+	}
+	if c.Timeout <= 0 {
+		c.Timeout = 10 * time.Second
 	}
 }
 

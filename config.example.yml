@@ -108,6 +108,19 @@ auth:
   # scopes: [openid, profile, email]
   # session_ttl: 12h
 
+  # Bounds every request to the IdP: the discovery document, the JWKS fetch,
+  # the token exchange. Ten seconds by default. Without one, a provider that
+  # accepts the connection and then says nothing holds the call for as long as
+  # the kernel's own retry limit — over two minutes.
+  # timeout: 10s
+  #
+  # DISCOVERY DOES NOT BLOCK STARTUP. It runs in the background and retries
+  # until the issuer answers, so an IdP that is down does not stop this app:
+  # it starts, serves everyone who already has a session — those are checked
+  # against the cookie signature, which owes the IdP nothing — and answers 503
+  # with the reason to anyone trying to sign IN. When the provider comes back,
+  # logins work again with no restart.
+
   # Authorisation, as opposed to authentication. Without this, anyone the IdP
   # knows can read every log line this tenant holds. Requires the id_token to
   # carry one of these in groups_claim.
