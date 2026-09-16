@@ -3,9 +3,12 @@
      supported SVG favicons for years, and it stays sharp at any size.
 
      currentColor is not available to a favicon, so the accent is spelled out.
-     It is the mid-blue that reads on both a light and a dark browser chrome. -->
+     It is the mid-blue that reads on both a light and a dark browser chrome.
+
+     The bottom line is yellow: blue over yellow is the flag of Ukraine. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
      stroke="#3b82f6" stroke-width="2.2" stroke-linecap="round">
-  <path d="M4 5h16M4 12h10M4 19h13"/>
+  <path d="M4 5h16M4 12h10"/>
+  <path d="M4 19h13" stroke="#ffd700"/>
   <circle cx="18.5" cy="12" r="2.6"/>
 </svg>

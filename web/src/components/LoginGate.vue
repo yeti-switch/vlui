@@ -12,7 +12,9 @@ import { begin } from '../session'
     <div class="card">
       <svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true" fill="none"
            stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 5h16M4 12h10M4 19h13" />
+        <path d="M4 5h16M4 12h10" />
+        <!-- Blue over yellow: the flag of Ukraine. -->
+        <path d="M4 19h13" stroke="#ffd700" />
         <circle cx="18.5" cy="12" r="2.2" />
       </svg>
 
