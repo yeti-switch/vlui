@@ -168,12 +168,15 @@ const emit = defineEmits<{
 }
 
 /* The same label the tools get. Theirs is styled in styles.css against
-   .rail-btn, which this span is not, so the placement is repeated here. */
+   .rail-btn, which this span is not, so the placement is repeated here, with
+   one difference: it hangs from the bottom rather than being centred. The label
+   is taller than the version number, and the number is the last thing before
+   the foot of the page — centred, the label reached below the rail, and a box
+   below the rail is a page that scrolls, even when the box is invisible. */
 .build .tip {
   position: absolute;
   left: calc(100% + 8px);
-  top: 50%;
-  transform: translateY(-50%);
+  bottom: 0;
   z-index: 40;
   padding: 4px 8px;
   border-radius: 4px;
