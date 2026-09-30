@@ -263,6 +263,22 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
+# Run the pod in its own user namespace. uid 65532 inside the container then
+# maps to an unprivileged, otherwise unused uid on the node, so a container
+# escape lands as a user that owns nothing there. vlui uses no host namespaces
+# or hostPath volumes, so it loses nothing by it.
+#
+# Needs Kubernetes 1.33+ (on by default there; 1.30-1.32 need the
+# UserNamespacesSupport feature gate), and on every node: Linux 6.3+ (for
+# idmapped mounts on tmpfs, which the config volume is), containerd 2.0+ or
+# CRI-O 1.25+, and runc 1.2+ or crun 1.9+. Where the node cannot do it, the pod
+# fails to start; where the API server has the gate off, the field is dropped
+# and the pod runs in the host user namespace as before.
+#
+# Set to true if your nodes are older than that, or to null to leave the field
+# out of the pod spec entirely.
+hostUsers: false
+
 securityContext:
   allowPrivilegeEscalation: false
   # vlui writes nothing: no database, no cache, no session store. The one thing
