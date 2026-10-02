@@ -123,7 +123,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Range   *rangeJSON `json:"range,omitempty"`
 		Prefix  string     `json:"prefix,omitempty"`
 		Default bool       `json:"default,omitempty"`
-		Color   string     `json:"color"`
+		// Absent when the rule only renames the value.
+		Color string `json:"color,omitempty"`
+		// What a matching value is shown as instead of itself. Absent when it
+		// is shown as logged.
+		Text string `json:"text,omitempty"`
 		// What a matching value means, for the tooltip. Absent when the value
 		// speaks for itself.
 		Description string `json:"description,omitempty"`
@@ -198,7 +202,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			for _, r := range style.Rules {
 				rule := styleRuleJSON{
 					Value: r.Value, Prefix: r.Prefix, Default: r.Default,
-					Color: r.Color, Description: r.Description,
+					Color: r.Color, Text: r.Text, Description: r.Description,
 				}
 				if b, ok := r.Bounds(); ok {
 					rule.Range = &rangeJSON{}

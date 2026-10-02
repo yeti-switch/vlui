@@ -51,6 +51,13 @@ function rule(field: string) {
   return valueRule(props.row[field] ?? '', props.styles[field]?.rules)
 }
 
+// A rule's text beside the value it stands for, never in place of it: this
+// pane is where somebody checks what was actually logged.
+function shown(field: string): string {
+  const text = rule(field)?.text
+  return text ? `${text}  (${display(field)})` : display(field)
+}
+
 function pill(field: string): boolean {
   return props.styles[field]?.type !== 'text'
 }
@@ -95,11 +102,12 @@ async function copyJSON() {
                goes to find out what a row actually says, and a red value with
                no explanation is the question they came with. -->
           <span
-            v-if="rule(f)"
+            v-if="rule(f)?.color"
             :class="[pill(f) ? 'tag' : 'tint', `v-${rule(f)?.color}`]"
             :title="rule(f)?.description"
-            >{{ display(f) }}</span
+            >{{ shown(f) }}</span
           >
+          <span v-else-if="rule(f)" :title="rule(f)?.description">{{ shown(f) }}</span>
           <template v-else>{{ display(f) }}</template>
         </dd>
       </template>

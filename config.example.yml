@@ -300,7 +300,7 @@ auth:
 #   prefix:  values that start with it.
 #   default: everything the rules above did not match. Last rule only.
 #
-# and one colour, by name: ok, warn, error, info, neutral or muted. Names rather
+# and a colour, by name: ok, warn, error, info, neutral or muted. Names rather
 # than hex because the UI has a light and a dark theme, and a colour that reads
 # in one is unreadable in the other; each name resolves to that theme's own.
 # A value no rule matches is drawn as plain text, so the presence of a colour
@@ -311,6 +311,11 @@ auth:
 # says why, which is the half a colour cannot carry — "429" is a question the
 # deployment already knows the answer to. Optional: a tooltip that repeats what
 # the value already says is noise.
+#
+# And a `text:`, which is shown IN PLACE of the value: for ids that mean
+# something to the system that logged them and nothing to the reader. A rule
+# with a text needs no colour — without one the text is drawn plain. The logged
+# value stays in the tooltip and in the log entry, and filters still use it.
 #
 # Anything else — an unknown colour or type, a range written backwards, a
 # `style:` naming one that does not exist — is refused at startup rather than
@@ -338,11 +343,18 @@ auth:
 #       - {range: 1000-, color: error}
 #       - {range: 250-999, color: warn}
 #
+#   # Ids shown as names, uncoloured.
+#   pop:
+#     rules:
+#       - {value: "1", text: Frankfurt}
+#       - {value: "2", text: Amsterdam}
+#
 # used as:
 #
 #   fields:
 #     - {name: payload.status, label: status, style: http_status}
 #     - {name: duration, style: slow}
+#     - {name: pop_id, label: pop, style: pop}
 
 # IS THIS ACCESS CONTROL? Only if you make it so. By default every signed-in
 # account may select every tool, which is right when the rail is a set of

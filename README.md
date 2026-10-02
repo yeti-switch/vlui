@@ -151,12 +151,17 @@ value_styles:
     rules:
       - {range: 1000-, color: error}    # a threshold, with no upper bound
       - {range: 250-999, color: warn}
+  pop:                                  # ids shown as names
+    rules:
+      - {value: "1", text: Frankfurt}
+      - {value: "2", text: Amsterdam}
 
 tools:
   - id: http
     fields:
       - {name: payload.status, label: status, style: http_status}
       - {name: duration, style: slow}
+      - {name: pop_id, label: pop, style: pop}
 ```
 
 `type` says how the colour lands. `tag`, the default, is a tinted pill — for a
@@ -172,6 +177,14 @@ named from `ok`, `warn`, `error`, `info`, `neutral`, `muted`, and optionally a
 says a value is worth attention, the description says why. Names rather than
 hex: each resolves to the current theme's own colour, so styles work in light and
 dark. A value no rule matches is drawn as plain text.
+
+A rule can also carry `text`, which is shown in place of the value — for ids
+that mean something to the system that logged them and nothing to the reader,
+like a PoP id. `color` is optional on such a rule; without it the text is drawn
+plain. The logged value is still in the cell's tooltip and beside the text in
+the log entry, and filtering from a cell or the log entry uses it. Rules match
+the value as logged, so a multi-line value is matched whole, not by its first
+line.
 
 Matching happens in the browser; the server publishes the styles with the rest
 of the config and refuses a bad one — unknown colour or type, backwards range,

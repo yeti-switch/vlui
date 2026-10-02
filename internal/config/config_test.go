@@ -365,6 +365,10 @@ value_styles:
     rules:
       - {range: 1000-, color: error, description: over a second}
       - {range: -999, color: ok}
+  pop:
+    rules:
+      - {value: "1", text: Frankfurt}
+      - {value: ["2", "3"], text: Amsterdam, color: info}
 
 tools:
   - id: web
@@ -412,6 +416,14 @@ tools:
 		t.Errorf("slow.rules[1].description = %q, want empty", got)
 	}
 
+	// A rule may rename a value instead of — or as well as — colouring it.
+	if r := cfg.ValueStyles["pop"].Rules[0]; r.Text != "Frankfurt" || r.Color != "" {
+		t.Errorf("pop.rules[0] = %+v, want text Frankfurt and no color", r)
+	}
+	if r := cfg.ValueStyles["pop"].Rules[1]; r.Text != "Amsterdam" || r.Color != "info" {
+		t.Errorf("pop.rules[1] = %+v, want text Amsterdam in info", r)
+	}
+
 	// A threshold: open at the top, because "slow past a second" has no upper
 	// bound and inventing one loses the colour on the day it is exceeded.
 	b, ok := cfg.ValueStyles["slow"].Rules[0].Bounds()
@@ -425,7 +437,9 @@ tools:
 	head := "tools:\n  - id: x\n    icon: gear\n    fields: [{name: a, style: s}]\nvalue_styles:\n  s:\n    rules:\n      - "
 	cases := map[string]string{
 		`{value: "200", color: chartreuse}`:      "not one this UI can draw",
-		`{value: "200"}`:                         "no color",
+		`{value: "200"}`:                         "no color and no text",
+		`{value: "200", text: " "}`:              "no color and no text",
+		`{value: "200", text: OK, color: teal}`:  "not one this UI can draw",
 		`{color: ok}`:                            "no matcher",
 		`{value: "200", prefix: "2", color: ok}`: "more than one",
 		`{range: 599-500, color: ok}`:            "the low bound comes first",

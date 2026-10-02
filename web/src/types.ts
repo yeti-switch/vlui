@@ -60,7 +60,11 @@ export interface StyleRule {
   range?: { lo?: number; hi?: number }
   prefix?: string
   default?: boolean
-  color: StyleColor
+  // Absent on a rule that only renames the value: it is drawn plain.
+  color?: StyleColor
+  // What a matching value is shown as instead of what was logged. The logged
+  // value stays in the tooltip, and filtering still uses it.
+  text?: string
   // What a matching value means, shown under the value in the cell's tooltip.
   // Absent when the value speaks for itself.
   description?: string

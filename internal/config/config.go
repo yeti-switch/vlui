@@ -135,7 +135,20 @@ type StyleRule struct {
 
 	// Color is one of StyleColors. Names, not hex: the table is drawn in two
 	// themes, and a colour that works in one is unreadable in the other.
+	//
+	// Optional when Text is set: a rule that only renames a value — a PoP id to
+	// the city it is in — has nothing to draw attention to.
 	Color string `yaml:"color"`
+
+	// Text is what a matching value is SHOWN as, in place of what was logged:
+	//
+	//   {value: "3", text: Frankfurt}
+	//
+	// For values that are ids — meaningful to the system that wrote them, a
+	// lookup for anybody reading. The logged value is never lost: it is in the
+	// cell's tooltip and beside the text in the log entry, and filtering from a
+	// cell still filters on it, since that is what the logs contain.
+	Text string `yaml:"text"`
 
 	// Description says what a matching value MEANS, on the second line of the
 	// cell's tooltip.
@@ -683,6 +696,7 @@ func (c *Config) validateValueStyles() error {
 			r.Prefix = strings.TrimSpace(r.Prefix)
 			r.Color = strings.TrimSpace(r.Color)
 			r.Description = strings.TrimSpace(r.Description)
+			r.Text = strings.TrimSpace(r.Text)
 
 			// Exactly one matcher. Two on one rule would be an intersection
 			// nobody wrote deliberately, and silently honouring the first is
@@ -715,10 +729,13 @@ func (c *Config) validateValueStyles() error {
 				r.bounds = bounds
 			}
 
-			if r.Color == "" {
-				return fmt.Errorf("value_styles[%s].rules[%d]: no color; want one of %s", name, i, strings.Join(StyleColors, ", "))
+			// A rule has to do something to a value: colour it, rename it, or
+			// both. One with neither would match and change nothing.
+			if r.Color == "" && r.Text == "" {
+				return fmt.Errorf("value_styles[%s].rules[%d]: no color and no text; want a color (one of %s), a text, or both",
+					name, i, strings.Join(StyleColors, ", "))
 			}
-			if !slices.Contains(StyleColors, r.Color) {
+			if r.Color != "" && !slices.Contains(StyleColors, r.Color) {
 				return fmt.Errorf("value_styles[%s].rules[%d]: color %q is not one this UI can draw; want one of %s",
 					name, i, r.Color, strings.Join(StyleColors, ", "))
 			}
