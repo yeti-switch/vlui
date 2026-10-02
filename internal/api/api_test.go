@@ -434,3 +434,52 @@ func nonEmptyLines(s string) []string {
 }
 
 var _ = io.Discard
+
+// A rule that renames a value reaches the browser with its text, and without a
+// colour when it has none — an empty "color" would be a class the stylesheet
+// does not have, rather than the plain text the config asked for.
+func TestConfigPublishesValueStyleText(t *testing.T) {
+	f := newFakeVL(t, func(w http.ResponseWriter, r *http.Request) {})
+
+	h := testServer(t, f.URL, func(c *config.Config) {
+		c.ValueStyles = map[string]config.ValueStyle{
+			"pop": {Type: config.StyleTag, Rules: []config.StyleRule{
+				{Value: config.StringList{"1"}, Text: "Frankfurt"},
+				{Value: config.StringList{"2"}, Text: "Amsterdam", Color: "info"},
+			}},
+		}
+		c.Tools = []config.Tool{{
+			ID: "sip", Tooltip: "SIP", Icon: "phone",
+			Fields: []config.Field{{Name: "pop_id", Style: "pop"}},
+		}}
+	})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, get("/config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var out struct {
+		ValueStyles map[string]struct {
+			Rules []map[string]any `json:"rules"`
+		} `json:"value_styles"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	rules := out.ValueStyles["pop"].Rules
+	if len(rules) != 2 {
+		t.Fatalf("pop rules = %v, want 2", rules)
+	}
+	if rules[0]["text"] != "Frankfurt" {
+		t.Errorf("rules[0].text = %v, want Frankfurt", rules[0]["text"])
+	}
+	if _, ok := rules[0]["color"]; ok {
+		t.Errorf("rules[0] carries a color it was not given: %v", rules[0])
+	}
+	if rules[1]["text"] != "Amsterdam" || rules[1]["color"] != "info" {
+		t.Errorf("rules[1] = %v, want text Amsterdam in info", rules[1])
+	}
+}

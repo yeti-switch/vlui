@@ -140,12 +140,12 @@ const columnWidths = computed<number[]>(() => {
       // A row with more lines carries a "+N" after its first one, and the
       // column has to hold both or the badge is what gets ellipsized.
       const extra = extraLines(row, column)
-      const len = cell(row, column).length + (extra ? String(extra).length + 3 : 0)
+      const len = shownText(row, column).length + (extra ? String(extra).length + 3 : 0)
       if (len > widest) widest = len
     }
     // Only a pill is wider than its text; colouring the text costs nothing.
     const content =
-      widest * charWidth.value + CELL_PADDING + (props.styles[column] && pill(column) ? TAG_PADDING : 0)
+      widest * charWidth.value + CELL_PADDING + (pilled(column) ? TAG_PADDING : 0)
 
     // The header is its own constraint. Same font as the cells — .mono applies
     // to the header cell too, and wins over the smaller size .head inherits —
@@ -205,8 +205,25 @@ function pill(column: string): boolean {
   return props.styles[column]?.type !== 'text'
 }
 
+// Whether the column can hold a pill at all, for its width: a style that only
+// renames values draws none.
+function pilled(column: string): boolean {
+  const style = props.styles[column]
+  return !!style && pill(column) && style.rules.some((r) => r.color)
+}
+
+// Matched against the value as LOGGED — not the reformatted timestamp, not the
+// first line of a multi-line one — because that is what a rule is written
+// against, and what the log entry matches too: a value renamed here and shown
+// raw there would have the two panes contradict each other.
 function rule(row: LogRow, column: string): StyleRule | null {
-  return matchers.value[column]?.(cell(row, column)) ?? null
+  return matchers.value[column]?.(row[column] ?? '') ?? null
+}
+
+// What the cell draws: a matched rule's text in place of the value, where it
+// has one.
+function shownText(row: LogRow, column: string): string {
+  return rule(row, column)?.text || cell(row, column)
 }
 
 function cell(row: LogRow, column: string): string {
@@ -298,14 +315,22 @@ function cellTitle(row: LogRow, column: string): string {
   const raw = row[column]
   if (raw === undefined) return ''
 
-  const shown = cell(row, column)
+  const shown = shownText(row, column)
   // A multi-line value is shown whole rather than as "first line (whole
   // thing)", which would print it twice — capped, because a sixty-line tooltip
   // is a screen of text the pointer is holding hostage. The drawer has all of
   // it, and that is what the count is pointing at.
-  const title = raw.includes('\n') ? capLines(raw) : shown === raw ? raw : `${shown}  (${raw})`
+  //
+  // A rule's text leads a multi-line value, as the line the lines belong to:
+  // the cell shows the text, and the tooltip has to say what it stands for.
+  const matched = rule(row, column)
+  const title = raw.includes('\n')
+    ? (matched?.text ? `${matched.text}\n` : '') + capLines(raw)
+    : shown === raw
+      ? raw
+      : `${shown}  (${raw})`
 
-  const description = rule(row, column)?.description
+  const description = matched?.description
   return description ? `${title}\n${description}` : title
 }
 
@@ -364,11 +389,11 @@ function mounted(el: Element | null) {
                  in a column mean something by their presence as well as their
                  hue. -->
             <span
-              v-if="rule(row, c)"
+              v-if="rule(row, c)?.color"
               :class="[pill(c) ? 'tag' : 'tint', `v-${rule(row, c)?.color}`]"
-              >{{ cell(row, c) }}</span
+              >{{ shownText(row, c) }}</span
             >
-            <template v-else>{{ cell(row, c) }}</template>
+            <template v-else>{{ shownText(row, c) }}</template>
             <!-- What the row could not show. Every row is the same height, so a
                  value with more lines in it loses them here rather than growing
                  the row; the count says so, and the row drawer has them. -->
