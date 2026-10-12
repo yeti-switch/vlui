@@ -42,6 +42,7 @@ type Config struct {
 	VictoriaLogs VictoriaLogs `yaml:"victorialogs"`
 	Auth         auth.Config  `yaml:"auth"`
 	Metrics      Metrics      `yaml:"metrics"`
+	Status       Status       `yaml:"status"`
 
 	// Queries are preset LogsQL queries offered in a dropdown next to the query
 	// line. Deployment knowledge — "how do I find SIP errors here" — belongs
@@ -399,6 +400,18 @@ type Tenant struct {
 	ProjectID int `yaml:"project_id"`
 }
 
+// Status is the /status page: VictoriaLogs' disk use and compression.
+type Status struct {
+	// AllowedGroups, when set, shows the page only to accounts in one of these
+	// groups, matched against auth.groups_claim like a tool's. Empty means every
+	// signed-in account.
+	//
+	// The page is instance-wide — every tenant, every stream, the data paths on
+	// the host — so a rail that is a boundary between groups usually wants this
+	// set as well.
+	AllowedGroups []string `yaml:"allowed_groups"`
+}
+
 type Metrics struct {
 	// Listen is the exporter's own socket — never a route on the app above,
 	// which sits behind OIDC and may sit under base_path. A scraper should not
@@ -550,6 +563,10 @@ func (c *Config) validate() error {
 		return err
 	}
 
+	if len(c.Status.AllowedGroups) > 0 && !c.Auth.Enabled {
+		return fmt.Errorf("status.allowed_groups needs auth.enabled — with authentication off there are no groups to check and the restriction would admit everyone")
+	}
+
 	return nil
 }
 
@@ -649,9 +666,10 @@ func (c *Config) validateTools() error {
 //
 // The tool is a path segment under the mount point — /http is the http tool —
 // and something answers those paths first: /api is the API, /healthz is the
-// health check, /assets is where the built JavaScript lives, and /icons is the
-// sheet of every icon name this config accepts. A tool named for one of those
-// would be a link that returns JSON, or a script, or somebody else's page.
+// health check, /assets is where the built JavaScript lives, /icons is the
+// sheet of every icon name this config accepts, and /status is VictoriaLogs'
+// disk use. A tool named for one of those would be a link that returns JSON,
+// or a script, or somebody else's page.
 // Refused at startup, where the operator is looking, rather than discovered by
 // whoever clicks the icon.
 var reservedIDs = map[string]bool{
@@ -659,6 +677,7 @@ var reservedIDs = map[string]bool{
 	"healthz": true,
 	"assets":  true,
 	"icons":   true,
+	"status":  true,
 }
 
 /* validateValueStyles checks every rule of every style, fills in the default

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ const (
 	EndpointFieldNames  = "/select/logsql/field_names"
 	EndpointFieldValues = "/select/logsql/field_values"
 	EndpointHealth      = "/health"
+	EndpointMetrics     = "/metrics"
 )
 
 // Filters are constraints the caller may not opt out of, sent as
@@ -266,32 +266,18 @@ func (c *Client) values(ctx context.Context, endpoint string, p ValuesParams) (V
 	return out, err
 }
 
-// Ping is the liveness probe behind vlui_vl_up. GET, not POST: /health is the
-// one endpoint here that is not a query.
+// Ping is the liveness probe behind vlui_vl_up. GET, not POST: /health, like
+// /metrics, is not a query.
 func (c *Client) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, c.opt.Timeout)
 	defer cancel()
 
-	started := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+EndpointHealth, nil)
+	resp, err := c.get(ctx, EndpointHealth)
 	if err != nil {
 		return err
 	}
-	c.applyAuth(req)
-
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		c.report(EndpointHealth, "error", started)
-		return fmt.Errorf("victorialogs %s: %w", EndpointHealth, err)
-	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrBody))
-
-	if resp.StatusCode != http.StatusOK {
-		c.report(EndpointHealth, strconv.Itoa(resp.StatusCode), started)
-		return &Error{Endpoint: EndpointHealth, StatusCode: resp.StatusCode}
-	}
-	c.report(EndpointHealth, "ok", started)
 	return nil
 }
 

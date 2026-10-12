@@ -483,3 +483,57 @@ func TestConfigPublishesValueStyleText(t *testing.T) {
 		t.Errorf("rules[1] = %v, want text Amsterdam in info", rules[1])
 	}
 }
+
+func TestStatusServesStorageStats(t *testing.T) {
+	f := newFakeVL(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "vl_data_size_bytes{type=\"storage\"} 1000\nvl_partitions 7\n")
+	})
+
+	h := testServer(t, f.URL, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, get("/status", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if f.lastPath != vl.EndpointMetrics {
+		t.Errorf("upstream path = %s, want %s", f.lastPath, vl.EndpointMetrics)
+	}
+	var got vl.StorageStats
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.DataBytes != 1000 || got.Partitions != 7 {
+		t.Errorf("got %+v, want data 1000 and 7 partitions", got)
+	}
+}
+
+func TestStatusUpstreamFailureBecomesBadGateway(t *testing.T) {
+	f := newFakeVL(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	})
+
+	h := testServer(t, f.URL, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, get("/status", nil))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+}
+
+// A 4xx on /metrics is a proxy that does not route it, not a mistyped query:
+// it is the upstream's failure, not the caller's.
+func TestStatusUpstream4xxIsBadGatewayNotBadRequest(t *testing.T) {
+	f := newFakeVL(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not routed", http.StatusNotFound)
+	})
+
+	h := testServer(t, f.URL, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, get("/status", nil))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+}

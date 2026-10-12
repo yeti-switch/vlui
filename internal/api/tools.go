@@ -69,7 +69,13 @@ func (s *Server) authorizeTool(r *http.Request, t *config.Tool) (*config.Tool, e
 
 // permitted reports whether the caller may use this tool.
 func (s *Server) permitted(r *http.Request, t *config.Tool) bool {
-	if len(t.AllowedGroups) == 0 {
+	return inGroups(r, t.AllowedGroups)
+}
+
+// inGroups reports whether the caller is in one of allowed. An empty list
+// admits everyone.
+func inGroups(r *http.Request, allowed []string) bool {
+	if len(allowed) == 0 {
 		return true
 	}
 	// Config refuses allowed_groups without auth.enabled, so a request reaching
@@ -79,7 +85,7 @@ func (s *Server) permitted(r *http.Request, t *config.Tool) bool {
 		return false
 	}
 	return slices.ContainsFunc(u.Groups, func(g string) bool {
-		return slices.Contains(t.AllowedGroups, g)
+		return slices.Contains(allowed, g)
 	})
 }
 

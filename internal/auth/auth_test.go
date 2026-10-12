@@ -374,6 +374,9 @@ func TestReturnToCannotLeaveTheApp(t *testing.T) {
 		"https://evil.example/phish",
 		"//evil.example/phish",
 		"javascript:alert(1)",
+		"/\\evil.example/phish",
+		"/\t/evil.example/phish",
+		"/\n/evil.example/phish",
 		"",
 	} {
 		if got := (&Auth{}).safeReturn(evil); got != "/" {
@@ -862,5 +865,47 @@ func TestDiscoveryIsBounded(t *testing.T) {
 	}
 	if took > 2*time.Second {
 		t.Errorf("discovery took %s against an unanswering provider; the timeout is not being applied", took)
+	}
+}
+
+// Hand-given endpoints still need the issuer: ID tokens are checked against it,
+// so a config without one would start and then refuse every login.
+func TestManualEndpointsNeedIssuer(t *testing.T) {
+	cfg := Config{
+		ClientID:    "app",
+		RedirectURL: "https://app.example/api/auth/callback",
+		AuthURL:     "https://idp.example/authorize",
+		TokenURL:    "https://idp.example/token",
+		JWKSURL:     "https://idp.example/keys",
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "issuer") {
+		t.Errorf("no issuer: err = %v", err)
+	}
+	cfg.Issuer = "https://idp.example"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("complete config: %v", err)
+	}
+	cfg.JWKSURL = ""
+	if err := cfg.Validate(); err == nil {
+		t.Error("auth_url without jwks_url must not validate")
+	}
+}
+
+// The other half: token_url or jwks_url without auth_url would be ignored in
+// favour of discovery, without a word.
+func TestManualEndpointsNeedAuthURL(t *testing.T) {
+	cfg := Config{
+		Issuer:      "https://idp.example",
+		ClientID:    "app",
+		RedirectURL: "https://app.example/api/auth/callback",
+		TokenURL:    "https://idp.example/token",
+		JWKSURL:     "https://idp.example/keys",
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "auth_url is required") {
+		t.Errorf("token_url and jwks_url alone: err = %v", err)
+	}
+	cfg.TokenURL = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "auth_url is required") {
+		t.Errorf("jwks_url alone: err = %v", err)
 	}
 }

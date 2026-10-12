@@ -163,3 +163,87 @@ func TestPingIsTheHealthEndpoint(t *testing.T) {
 		t.Errorf("ping hit %s %s, want GET %s", method, path, vl.EndpointHealth)
 	}
 }
+
+// A trimmed /metrics from a single-node VictoriaLogs, with the lines around the
+// storage gauges kept so the parser has to skip them.
+const metricsSample = `# HELP vl_data_size_bytes Data size
+# TYPE vl_data_size_bytes gauge
+vl_data_size_bytes{type="storage"} 1000
+vl_data_size_bytes{type="indexdb"} 50
+vl_compressed_data_size_bytes{type="storage/inmemory"} 10
+vl_compressed_data_size_bytes{type="storage/small"} 90
+vl_compressed_data_size_bytes{type="storage/big"} 900
+vl_uncompressed_data_size_bytes{type="storage/big"} 9000
+vl_uncompressed_data_size_bytes{type="storage/inmemory"} 50
+vl_uncompressed_data_size_bytes{type="storage/small"} 950
+vl_storage_rows{type="storage/big"} 3e+06
+vl_storage_rows{type="storage/small"} 1000
+vl_storage_parts{type="storage/big"} 4
+vl_partitions 7
+vl_free_disk_space_bytes{path="/vlogs \"data\""} 2000
+vl_total_disk_space_bytes{path="/vlogs \"data\""} 5000
+vl_max_disk_space_usage_bytes{path="/vlogs \"data\""} 4000
+vl_storage_is_read_only{path="/vlogs \"data\""} 0
+vl_http_requests_total{path="/select/logsql/query"} 12
+flag{name="retentionPeriod", value="7d", is_set="true"} 1
+flag{name="httpListenAddr", value=":9428", is_set="false"} 0
+go_goroutines 42
+`
+
+func TestStorageStatsSummarisesMetrics(t *testing.T) {
+	var path, method, account string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, method, account = r.URL.Path, r.Method, r.Header.Get("AccountID")
+		_, _ = io.WriteString(w, metricsSample)
+	}))
+	defer srv.Close()
+
+	c := vl.New(vl.Options{URL: srv.URL, Timeout: 5 * time.Second, AccountID: 3}, nil)
+	got, err := c.StorageStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != vl.EndpointMetrics || method != http.MethodGet || account != "3" {
+		t.Errorf("hit %s %s with AccountID %q, want GET %s with 3", method, path, account, vl.EndpointMetrics)
+	}
+
+	if got.DataBytes != 1000 || got.IndexdbBytes != 50 {
+		t.Errorf("data/indexdb = %d/%d, want 1000/50", got.DataBytes, got.IndexdbBytes)
+	}
+	if got.CompressedBytes != 1000 || got.UncompressedBytes != 10000 {
+		t.Errorf("compressed/uncompressed = %d/%d, want 1000/10000", got.CompressedBytes, got.UncompressedBytes)
+	}
+	if got.Rows != 3001000 || got.Parts != 4 || got.Partitions != 7 {
+		t.Errorf("rows/parts/partitions = %d/%d/%d, want 3001000/4/7", got.Rows, got.Parts, got.Partitions)
+	}
+	if got.Retention != "7d" {
+		t.Errorf("retention = %q, want 7d", got.Retention)
+	}
+
+	var names []string
+	for _, tier := range got.Tiers {
+		names = append(names, tier.Name)
+	}
+	if strings.Join(names, ",") != "inmemory,small,big" {
+		t.Errorf("tiers = %v, want inmemory,small,big", names)
+	}
+
+	want := vl.DiskPath{Path: `/vlogs "data"`, FreeBytes: 2000, TotalBytes: 5000, MaxUsageBytes: 4000}
+	if len(got.Paths) != 1 || got.Paths[0] != want {
+		t.Errorf("paths = %+v, want [%+v]", got.Paths, want)
+	}
+}
+
+func TestStorageStatsRefusesAnAnswerWithoutStorageGauges(t *testing.T) {
+	// What a vlselect answers: metrics, but none about storage.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "vl_http_requests_total{path=\"/select/logsql/query\"} 12\ngo_goroutines 42\n")
+	}))
+	defer srv.Close()
+
+	c := vl.New(vl.Options{URL: srv.URL, Timeout: 5 * time.Second}, nil)
+	_, err := c.StorageStats(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "single-node") {
+		t.Fatalf("err = %v, want one that names the single-node requirement", err)
+	}
+}

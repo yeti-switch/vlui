@@ -228,6 +228,8 @@ func TestToolIDs(t *testing.T) {
 		"tools:\n  - id: assets\n    icon: gear\n":  `id "assets" is one of the paths this app answers itself`,
 		// /icons is the sheet of every icon name this config accepts.
 		"tools:\n  - id: icons\n    icon: gear\n": `id "icons" is one of the paths this app answers itself`,
+		// /status is VictoriaLogs' disk use.
+		"tools:\n  - id: status\n    icon: gear\n": `id "status" is one of the paths this app answers itself`,
 	}
 	for body, want := range cases {
 		t.Run(want, func(t *testing.T) {
@@ -591,5 +593,14 @@ func TestToolFieldValidation(t *testing.T) {
 				t.Errorf("error = %v, want it to mention %q", err, want)
 			}
 		})
+	}
+}
+
+// Like a tool's: with authentication off there are no groups, and the setting
+// would admit everyone while looking like it does not.
+func TestStatusAllowedGroupsNeedsAuth(t *testing.T) {
+	_, err := config.Load(write(t, "status:\n  allowed_groups: [ops]\n"))
+	if err == nil || !strings.Contains(err.Error(), "status.allowed_groups needs auth.enabled") {
+		t.Fatalf("err = %v, want the auth.enabled requirement", err)
 	}
 }

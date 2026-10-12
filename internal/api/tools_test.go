@@ -301,3 +301,52 @@ func TestEmptyQueryStillFailsWithoutAToolFilter(t *testing.T) {
 		}
 	})
 }
+
+// The status page is instance-wide, so status.allowed_groups gates both the
+// endpoint and the rail's link to it.
+func TestStatusChecksGroups(t *testing.T) {
+	f := newFakeVL(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("vl_partitions 7\n"))
+	})
+
+	cfg := toolCfg(f.URL)
+	cfg.Auth.Enabled = true
+	cfg.Status.AllowedGroups = []string{"ops"}
+
+	statusAllowed := func(h http.Handler) bool {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, get("/config", nil))
+		var out struct {
+			StatusAllowed bool `json:"status_allowed"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.StatusAllowed
+	}
+
+	t.Run("outsider is refused", func(t *testing.T) {
+		h := toolServer(t, cfg, &auth.User{Subject: "u1", Groups: []string{"noc"}})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, get("/status", nil))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		if statusAllowed(h) {
+			t.Error("config offers the status page to an outsider")
+		}
+	})
+
+	t.Run("member is allowed", func(t *testing.T) {
+		h := toolServer(t, cfg, &auth.User{Subject: "u2", Groups: []string{"ops"}})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, get("/status", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		if !statusAllowed(h) {
+			t.Error("config hides the status page from a member")
+		}
+	})
+}
