@@ -15,12 +15,27 @@ defineProps<{
   user: User | null
   tools: Tool[]
   activeTool: string
+  statusAllowed: boolean
+  statusActive: boolean
 }>()
+
+// The status page, wherever the app is mounted: the <base href> the server
+// injects already knows.
+const statusHref = new URL('status', document.baseURI).pathname
 
 const emit = defineEmits<{
   'sign-out': []
   'select-tool': [string]
+  'open-status': []
 }>()
+
+// A plain click opens the page in place, keeping the logs as they are; a
+// modified one is left to the browser, so a new tab still works.
+function onStatusClick(e: MouseEvent) {
+  if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+  e.preventDefault()
+  emit('open-status')
+}
 </script>
 
 <template>
@@ -59,6 +74,13 @@ const emit = defineEmits<{
     </button>
 
     <div class="prefs">
+      <!-- A link, not a tool: it leaves the logs for VictoriaLogs' own figures. -->
+      <a v-if="statusAllowed" class="rail-btn" :class="{ active: statusActive }" :href="statusHref"
+         aria-label="Storage status" :aria-current="statusActive ? 'page' : undefined" @click="onStatusClick">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor"
+             stroke-width="1.7" aria-hidden="true" v-html="iconBody('database')"></svg>
+        <span class="tip">Storage status</span>
+      </a>
       <TimezoneSelect />
       <ThemeToggle />
       <UserMenu v-if="authEnabled && user" :user="user" @sign-out="emit('sign-out')" />
@@ -114,9 +136,10 @@ const emit = defineEmits<{
 }
 
 /* The selected tool is filled rather than tinted: it says what every query on
-   the screen is scoped to, which is worth more than subtlety. */
-.tool.active,
-.tool.active:hover {
+   the screen is scoped to, which is worth more than subtlety. The status link
+   fills the same way when it is the page on screen. */
+.rail-btn.active,
+.rail-btn.active:hover {
   background: var(--accent);
   color: #fff;
 }

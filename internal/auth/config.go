@@ -156,8 +156,21 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validate() error {
-	if c.Issuer == "" && c.AuthURL == "" {
-		return fmt.Errorf("auth: issuer is required (or give auth_url/token_url/jwks_url by hand)")
+	// Required with hand-given endpoints too: nothing is fetched from it then,
+	// but every ID token's iss claim is checked against it, and without it no
+	// login could ever succeed.
+	if c.Issuer == "" {
+		return fmt.Errorf("auth: issuer is required — with auth_url/token_url/jwks_url given by hand too, as it must equal the iss claim of the ID tokens")
+	}
+	if c.AuthURL != "" && (c.TokenURL == "" || c.JWKSURL == "") {
+		return fmt.Errorf("auth: token_url and jwks_url are required when auth_url is given by hand")
+	}
+	// The other way round too: without auth_url the endpoints come from
+	// discovery, so a token_url or jwks_url on its own would be ignored without
+	// a word — against a provider with no discovery document, that is logins
+	// that never work.
+	if c.AuthURL == "" && (c.TokenURL != "" || c.JWKSURL != "") {
+		return fmt.Errorf("auth: auth_url is required when token_url or jwks_url is given by hand — without it they are ignored and the endpoints are discovered")
 	}
 	if c.ClientID == "" {
 		return fmt.Errorf("auth: client_id is required")

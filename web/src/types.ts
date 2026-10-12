@@ -94,6 +94,8 @@ export interface AppConfig {
   tail_max_seconds: number
   queries: Preset[]
   tools: Tool[]
+  // Whether this account may open the status page: status.allowed_groups.
+  status_allowed: boolean
   // The value styles a tool's fields refer to by name. Absent when no tool this
   // account can see uses one.
   value_styles?: Record<string, ValueStyle>
@@ -135,4 +137,35 @@ export interface ValuesResponse {
 export interface TimeRange {
   startMs: number
   endMs: number
+}
+
+// GET /api/status: VictoriaLogs' storage, read from its own /metrics. Bytes and
+// counts as numbers; the page does the formatting.
+export interface StorageTier {
+  name: string
+  rows: number
+  parts: number
+  compressed_bytes: number
+  uncompressed_bytes: number
+}
+
+export interface DiskPath {
+  path: string
+  free_bytes: number
+  total_bytes: number
+  max_usage_bytes?: number
+  read_only: boolean
+}
+
+export interface StorageStatus {
+  data_bytes: number
+  indexdb_bytes: number
+  compressed_bytes: number
+  uncompressed_bytes: number
+  rows: number
+  parts: number
+  partitions: number
+  retention?: string
+  tiers: StorageTier[]
+  paths: DiskPath[]
 }

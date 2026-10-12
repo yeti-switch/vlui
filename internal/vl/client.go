@@ -90,15 +90,33 @@ const maxErrBody = 8 << 10
 //
 // The returned response's Body is the caller's to close.
 func (c *Client) post(ctx context.Context, endpoint string, form url.Values) (*http.Response, error) {
+	return c.do(ctx, http.MethodPost, endpoint, form)
+}
+
+// get is post for the two endpoints that are not queries: /health and
+// /metrics.
+func (c *Client) get(ctx context.Context, endpoint string) (*http.Response, error) {
+	return c.do(ctx, http.MethodGet, endpoint, nil)
+}
+
+// do is every request this client makes: the tenant and credentials, the
+// observer, and a non-200 turned into an *Error carrying what VictoriaLogs said.
+// A nil form sends no body.
+func (c *Client) do(ctx context.Context, method, endpoint string, form url.Values) (*http.Response, error) {
 	started := time.Now()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+endpoint,
-		strings.NewReader(form.Encode()))
+	var body io.Reader
+	if form != nil {
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+endpoint, body)
 	if err != nil {
 		c.report(endpoint, "error", started)
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 	c.applyAuth(req)
 
 	resp, err := c.hc.Do(req)

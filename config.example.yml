@@ -164,7 +164,8 @@ auth:
   # secure_cookie: false
 
   # For a provider that publishes no discovery document, give the endpoints by
-  # hand instead of `issuer`:
+  # hand. `issuer` is still required: ID tokens' iss claim is checked against it.
+  # auth_url needs token_url and jwks_url alongside it.
   # auth_url:  https://idp.example/authorize
   # token_url: https://idp.example/token
   # jwks_url:  https://idp.example/jwks
@@ -216,10 +217,10 @@ auth:
 #          request sends. Treat it as a name rather than a label: renaming it
 #          breaks existing links to that tool.
 #
-#          Letters, digits, dashes and underscores. Not api, healthz or assets:
-#          the server answers those paths itself, so a tool there would be a
-#          link that never reaches the UI. Refused at startup rather than
-#          silently.
+#          Letters, digits, dashes and underscores. Not api, healthz, assets,
+#          icons or status: the server answers those paths itself, so a tool
+#          there would be a link that never reaches the UI. Refused at startup
+#          rather than silently.
 # tooltip: the label shown on hover. Defaults to the id.
 # icon:    one of gear, yeti, bolt, bug, chart, cloud, database, globe, lock,
 #          phone, server, tag, terminal, window, exchange, paw, clock, cycle,
@@ -380,6 +381,20 @@ auth:
 # Note what this still is not: a restriction on WHICH LOGS EXIST. Anyone who can
 # reach VictoriaLogs directly is unaffected by any of it — keep it on loopback
 # or behind vmauth.
+
+# The status page, at /status and behind the database icon at the foot of the
+# rail: VictoriaLogs' disk use, free space, compression and retention, read from
+# its own /metrics. Single-node VictoriaLogs only — a cluster's vlselect does not
+# export these, and the page says so.
+#
+# It is INSTANCE-WIDE: every tenant and every stream, and the data paths on the
+# host. No tool filter applies to it. By default every signed-in account may
+# open it; if the rail is a boundary between groups, this probably should be
+# too. Like a tool's, allowed_groups requires auth.enabled, and an account
+# outside them gets a 403 and no icon.
+#
+# status:
+#   allowed_groups: [sre, admin]
 
 # The built-in Prometheus exporter, on its own socket. Never a route on the app:
 # that one sits behind OIDC and may sit under base_path, and a scraper should

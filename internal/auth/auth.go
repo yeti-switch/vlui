@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -88,9 +89,6 @@ func New(ctx context.Context, cfg Config, base string, log *slog.Logger) (*Auth,
 		// Endpoints given by hand: for a provider with no discovery document.
 		// Nothing to discover, so this path is ready before it returns —
 		// NewRemoteKeySet fetches the keys lazily, on the first verification.
-		if cfg.JWKSURL == "" {
-			return nil, errors.New("auth: jwks_url is required when endpoints are configured by hand")
-		}
 		ks := oidc.NewRemoteKeySet(a.clientContext(ctx), cfg.JWKSURL)
 		a.setProvider(
 			oauth2.Endpoint{AuthURL: cfg.AuthURL, TokenURL: cfg.TokenURL},
@@ -539,7 +537,8 @@ func UserFrom(ctx context.Context) (User, bool) {
 func (a *Auth) decodeFlow(token string) (flow, error) {
 	var f flow
 	body, sig, ok := strings.Cut(token, ".")
-	if !ok || sig != a.sign(body) {
+	// Constant time, as for the session cookie: both are signed with the same key.
+	if !ok || !hmac.Equal([]byte(sig), []byte(a.sign(body))) {
 		return f, errors.New("bad login state")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(body)
@@ -560,6 +559,12 @@ func (a *Auth) decodeFlow(token string) (flow, error) {
 // than being anyone else's problem.
 func (a *Auth) safeReturn(p string) string {
 	if p == "" || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+		return "/"
+	}
+	// Browsers read a backslash as a slash, so /\evil.example is //evil.example;
+	// and they strip tabs and newlines from URLs, so /<TAB>/evil.example is too.
+	// Neither has any business in a path of ours.
+	if strings.ContainsFunc(p, func(r rune) bool { return r == '\\' || r < 0x20 || r == 0x7f }) {
 		return "/"
 	}
 	if a.base != "" {

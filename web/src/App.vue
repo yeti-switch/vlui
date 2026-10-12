@@ -10,6 +10,7 @@ import ResultsTable from './components/ResultsTable.vue'
 import RowDetail from './components/RowDetail.vue'
 import LoginGate from './components/LoginGate.vue'
 import IconsPage from './components/IconsPage.vue'
+import StatusPage from './components/StatusPage.vue'
 import SideRail from './components/SideRail.vue'
 import { markSignedOut, signedOut } from './session'
 
@@ -484,6 +485,20 @@ function toggleColumn(field: string) {
 // Switching tool changes what every panel is looking at, so it re-runs rather
 // than leaving the previous tool's rows on screen under the new icon.
 function selectTool(id: string) {
+  // Leaving a page of the app for the logs. A new history entry, so Back
+  // returns to the page; writeURL below then fills it in.
+  if (page.value) {
+    page.value = ''
+    history.pushState(null, '', `${basePath()}${id}`)
+    if (!workspaceStarted) {
+      startWorkspace()
+      return
+    }
+    if (id === activeTool.value) {
+      writeURL()
+      return
+    }
+  }
   if (id === activeTool.value) return
 
   // Whatever is in the box belongs to the tool being left, including an empty
@@ -558,8 +573,8 @@ function onKeydown(e: KeyboardEvent) {
   if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return
 
   // Nothing to run, follow or show until the app itself is up: the login gate
-  // and the icon sheet are pages of their own.
-  if (!cfg.value || signedOut.value || showIcons.value) return
+  // and the app's own pages have no query to run.
+  if (!cfg.value || signedOut.value || page.value) return
 
   switch (e.key.toLowerCase()) {
     case 'r':
@@ -632,19 +647,63 @@ function toolFromPath(): string {
   return rest.split('/')[0] ?? ''
 }
 
-/* The one path that is not a tool: /icons, the reference sheet of every name
- * `icon:` accepts.
+/* The paths that are pages of this app rather than tools:
+ *
+ *   icons   the reference sheet of every name `icon:` accepts, drawn as a page
+ *           of its own;
+ *   status  VictoriaLogs' disk use and compression, drawn in the workspace's
+ *           place beside the rail.
  *
  * Behind the same session as everything else — the boot fetches the config
- * first and a 401 raises the login gate over this page too — but not behind a
- * working VictoriaLogs, which is the part that matters: somebody editing tool
- * config is often doing it because the deployment is not otherwise happy.
+ * first and a 401 raises the login gate over these too — but not behind a
+ * query: neither runs one, and the workspace is not started for them.
  *
- * `icons` is refused as a tool id at startup, so this can never shadow a real
- * tool.
+ * Each is refused as a tool id at startup (config.reservedIDs), so none can
+ * shadow a real tool. A new one is a name here and a branch in the template.
  */
-const ICONS_PATH = 'icons'
-const showIcons = computed(() => toolFromPath() === ICONS_PATH)
+const APP_PAGES = ['icons', 'status'] as const
+type AppPage = (typeof APP_PAGES)[number]
+
+function pageFromPath(): AppPage | '' {
+  const p = toolFromPath()
+  return (APP_PAGES as readonly string[]).includes(p) ? (p as AppPage) : ''
+}
+
+// '' is the logs. A ref rather than a reading of location, because the status
+// page is entered and left without a page load.
+const page = ref<AppPage | ''>(pageFromPath())
+
+/* The workspace starts once, on the first visit to the logs: reading the URL
+ * and running what it asks for. Arriving on /status does not start it, and
+ * leaving /status for a tool does — after which it is only hidden and shown
+ * again, so the query, the columns and the rows survive a look at the disk. */
+let workspaceStarted = false
+
+function startWorkspace() {
+  workspaceStarted = true
+  readURL()
+  run()
+}
+
+// The rail's status link. Pushed rather than replaced, so Back returns to the
+// logs as they were.
+function openStatus() {
+  if (page.value === 'status') return
+  history.pushState(null, '', `${basePath()}status`)
+  page.value = 'status'
+}
+
+// Back and Forward between the logs and the status page.
+function onPopState() {
+  page.value = pageFromPath()
+  if (page.value) return
+  if (!workspaceStarted) {
+    startWorkspace()
+    return
+  }
+  const wanted = toolFromPath()
+  if (wanted && wanted !== activeTool.value) selectTool(wanted)
+}
 
 function writeURL() {
   const p = new URLSearchParams()
@@ -761,6 +820,7 @@ onMounted(async () => {
   // rail, the table, a button, or nothing at all, and Escape means the same
   // thing wherever they are.
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('popstate', onPopState)
 
   try {
     const c = await fetchConfig()
@@ -781,10 +841,10 @@ onMounted(async () => {
     return
   }
 
-  // The icons sheet is a page of this app, not a page of the logs: it needs the
-  // same session everything else does — which the fetch above has just proved —
-  // and nothing after this point, since there is no query on it to run.
-  if (showIcons.value) return
+  // The app's own pages need the same session everything else does — which the
+  // fetch above has just proved — and nothing after this point, since there is
+  // no query on them to run.
+  if (page.value) return
 
   /* And then it runs, whether or not the URL carried a query.
    *
@@ -797,12 +857,12 @@ onMounted(async () => {
    * It also settles the address bar: run() writes the whole URL, so a bare
    * /http becomes /http#q=…&limit=…&range=… — what is actually on screen, ready
    * to be copied to somebody else. */
-  readURL()
-  run()
+  startWorkspace()
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('popstate', onPopState)
   queryAbort?.abort()
   hitsAbort?.abort()
   facetsAbort?.abort()
@@ -816,7 +876,7 @@ onUnmounted(() => {
        deployment can be configured with is not for whoever finds the URL. -->
   <LoginGate v-if="signedOut" />
 
-  <IconsPage v-else-if="showIcons && cfg" />
+  <IconsPage v-else-if="page === 'icons' && cfg" />
 
   <div v-else class="app">
     <SideRail
@@ -825,12 +885,22 @@ onUnmounted(() => {
       :auth-enabled="cfg?.auth_enabled ?? false"
       :user="cfg?.user ?? null"
       :tools="cfg?.tools ?? []"
-      :active-tool="tool?.id ?? ''"
+      :active-tool="page ? '' : (tool?.id ?? '')"
+      :status-allowed="cfg?.status_allowed ?? false"
+      :status-active="page === 'status'"
       @sign-out="signOut"
       @select-tool="selectTool"
+      @open-status="openStatus"
     />
 
-    <div class="workspace">
+    <!-- The status page keeps the rail, so the way back to the logs is where it
+         always is. It waits on cfg like the icons sheet: the server has to have
+         said who this is first. -->
+    <StatusPage v-if="page === 'status' && cfg" />
+
+    <!-- Hidden rather than unmounted while the status page is up: what the
+         reader had on screen is still there when they come back. -->
+    <div v-show="!(page === 'status' && cfg)" class="workspace">
       <p v-if="bootError" class="banner">{{ bootError }}</p>
 
       <template v-if="cfg">

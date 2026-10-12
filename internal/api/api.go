@@ -68,6 +68,9 @@ func (s *Server) Routes() http.Handler {
 
 		// GET, because EventSource cannot POST. Tail queries are short.
 		r.Get("/tail", s.handleTail)
+
+		// The /status page: VictoriaLogs' disk use and compression.
+		r.Get("/status", s.handleStatus)
 	})
 
 	return r
@@ -159,6 +162,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		TailMaxSecs  float64      `json:"tail_max_seconds"`
 		Queries      []presetJSON `json:"queries"`
 		Tools        []toolJSON   `json:"tools"`
+		// Whether this caller may open the status page, so the rail can leave
+		// the link out rather than offer a 403.
+		StatusAllowed bool `json:"status_allowed"`
 		// Only the styles the tools above actually refer to: a style nobody on
 		// this rail can reach is not this caller's business.
 		ValueStyles map[string]valueStyleJSON `json:"value_styles,omitempty"`
@@ -173,6 +179,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		TailMaxSecs:  s.cfg.VictoriaLogs.TailMaxDuration.Seconds(),
 		Queries:      make([]presetJSON, 0, len(s.cfg.Queries)),
 		Tools:        make([]toolJSON, 0, len(s.cfg.Tools)),
+
+		StatusAllowed: inGroups(r, s.cfg.Status.AllowedGroups),
 	}
 	if u, ok := auth.UserFrom(r.Context()); ok {
 		out.User = &u

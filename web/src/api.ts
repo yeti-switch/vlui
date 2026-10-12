@@ -4,6 +4,7 @@ import type {
   FacetsResponse,
   HitsResponse,
   LogRow,
+  StorageStatus,
   TimeRange,
   ValuesResponse,
 } from './types'
@@ -78,6 +79,10 @@ async function getJSON<T>(path: string, params: Record<string, string | number |
 
 export function fetchConfig(): Promise<AppConfig> {
   return getJSON<AppConfig>('config', {})
+}
+
+export function fetchStatus(signal?: AbortSignal): Promise<StorageStatus> {
+  return getJSON<StorageStatus>('status', {}, signal)
 }
 
 export function fetchHits(query: string, range: TimeRange, tool: string, signal?: AbortSignal): Promise<HitsResponse> {
